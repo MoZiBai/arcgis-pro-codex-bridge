@@ -30,6 +30,16 @@ try {
 
     $zip = Get-ChildItem -LiteralPath $releaseOutput -Filter '*.zip' | Select-Object -First 1
     if (-not $zip) { throw 'Release ZIP was not produced.' }
+    $checksumFile = "$($zip.FullName).sha256"
+    $checksumText = [System.IO.File]::ReadAllText($checksumFile)
+    if ($checksumText.Contains("`r")) {
+        throw 'Release checksum file must use cross-platform LF line endings.'
+    }
+    $declaredZipHash = ($checksumText.Trim() -split '\s+')[0]
+    $actualZipHash = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($declaredZipHash -ne $actualZipHash) {
+        throw 'Release ZIP checksum file does not match the archive.'
+    }
     Expand-Archive -LiteralPath $zip.FullName -DestinationPath $extractRoot
     $packageRoot = Get-ChildItem -LiteralPath $extractRoot -Directory | Select-Object -First 1
     if (-not $packageRoot) { throw 'Release ZIP does not contain its versioned root directory.' }

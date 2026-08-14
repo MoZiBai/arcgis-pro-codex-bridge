@@ -165,7 +165,7 @@ Compress-Archive -LiteralPath $releaseRoot -DestinationPath $zipPath -Compressio
 $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 [System.IO.File]::WriteAllText(
     $checksumPath,
-    "$zipHash  $([System.IO.Path]::GetFileName($zipPath))" + [Environment]::NewLine,
+    "$zipHash  $([System.IO.Path]::GetFileName($zipPath))`n",
     [System.Text.UTF8Encoding]::new($false)
 )
 
