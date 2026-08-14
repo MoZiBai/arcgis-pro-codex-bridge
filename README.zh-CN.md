@@ -10,7 +10,7 @@
 ArcGIS Pro 项目，无需鼠标键盘自动化。
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.1-486581)](docs/live-bridge-protocol-v0.28.1.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.2-486581)](docs/live-bridge-protocol-v0.28.2.md)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
 
 当前版本提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
@@ -70,8 +70,8 @@ ArcMap / ArcGIS Desktop 10.2–10.8 使用不同的 Python、ArcObjects 和 Add-
 推荐从 GitHub Releases 下载：
 
 ```text
-arcgis-pro-codex-bridge-0.28.1-win-x64.zip
-arcgis-pro-codex-bridge-0.28.1-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.28.2-win-x64.zip
+arcgis-pro-codex-bridge-0.28.2-win-x64.zip.sha256
 ```
 
 验证 SHA-256 后解压，在 PowerShell 中运行：
@@ -115,11 +115,14 @@ ArcPy 运行时。Windows Security 报告 ArcGIS DLL 时，应优先检查 Prote
 
 ## 配置
 
-安装后的私有配置位于：
+使用默认安装根时，私有配置位于：
 
 ```text
 %LOCALAPPDATA%\ArcGISCodexBridge\config\config.json
 ```
+
+使用 `-InstallRoot` 时，配置位于 `<InstallRoot>\config\config.json`；固定的
+用户级 locator 会引导 Add-in 找到该自定义安装根。
 
 主要配置项：
 
@@ -210,8 +213,8 @@ Release 生命周期测试在临时目录中完成解压、逐文件哈希验证
 ## 文档
 
 - [安装与生命周期](docs/installation.md)
-- [v0.28.1 协议](docs/live-bridge-protocol-v0.28.1.md)
+- [v0.28.2 协议](docs/live-bridge-protocol-v0.28.2.md)
 - [实时桥接设计](docs/live-bridge-design.md)
 - [能力矩阵](docs/capability-matrix.md)
 - [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)
-- [v0.28.1 Release 说明](docs/release-v0.28.1.md)
+- [v0.28.2 Release 说明](docs/release-v0.28.2.md)

@@ -265,6 +265,7 @@ def main() -> int:
         raise RuntimeError("Could not parse BridgeSupport.Capabilities")
     capabilities = set(re.findall(r'"([a-z_]+)"', match.group("body")))
     dispatch_source = DISPATCH_SOURCE.read_text(encoding="utf-8")
+    server_source = (ROOT / "src" / "arcgis_mcp" / "server.py").read_text(encoding="utf-8")
     dispatch_match = re.search(
         r"return action switch\s*\{(?P<body>.*?)_ => throw new NotSupportedException",
         dispatch_source,
@@ -288,6 +289,17 @@ def main() -> int:
     missing_dispatch = sorted(capabilities - dispatch_actions)
     extra_dispatch = sorted(dispatch_actions - capabilities)
     internal_actions = {"run_arcpy_worker"}
+    prepare_match = re.search(
+        r"def _prepare_live_action\(.*?allowed_actions\s*=\s*\{(?P<body>.*?)\}\s*if action not in allowed_actions",
+        server_source,
+        flags=re.DOTALL,
+    )
+    if not prepare_match:
+        raise RuntimeError("Could not parse ArcGISMCP._prepare_live_action allowlist")
+    batch_actions = set(re.findall(r'"([a-z_]+)"', prepare_match.group("body")))
+    expected_batch_actions = capabilities - internal_actions - {"execute_batch"}
+    missing_batch_actions = sorted(expected_batch_actions - batch_actions)
+    extra_batch_actions = sorted(batch_actions - expected_batch_actions)
     extra_actions = sorted(
         capabilities - set(TOOL_TO_ACTION.values()) - internal_actions
     )
@@ -311,13 +323,17 @@ def main() -> int:
         or extra_dispatch
         or duplicate_tools
         or unmapped_live_tools
+        or missing_batch_actions
+        or extra_batch_actions
     ):
         raise RuntimeError(
             "Protocol mismatch: "
             f"missing_tools={missing_tools}, missing_actions={missing_actions}, "
             f"extra_actions={extra_actions}, missing_dispatch={missing_dispatch}, "
             f"extra_dispatch={extra_dispatch}, duplicate_tools={duplicate_tools}, "
-            f"unmapped_live_tools={unmapped_live_tools}"
+            f"unmapped_live_tools={unmapped_live_tools}, "
+            f"missing_batch_actions={missing_batch_actions}, "
+            f"extra_batch_actions={extra_batch_actions}"
         )
 
     print(

@@ -57,6 +57,20 @@ def main() -> int:
         ),
         "allow_source_editing=false",
     )
+    expect_permission_error(
+        lambda: server._prepare_live_action(
+            "control_operation_history",
+            {"operation": "undo", "confirm_source_edit": True},
+        ),
+        "allow_source_editing=false",
+    )
+    expect_permission_error(
+        lambda: server._prepare_live_action(
+            "evaluate_attribute_rules",
+            {"member_name": "synthetic", "confirm_evaluate": True},
+        ),
+        "allow_source_editing=false",
+    )
 
     server.allow_source_editing = True
     server._prepare_live_action(

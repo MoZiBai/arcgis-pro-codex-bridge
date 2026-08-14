@@ -49,6 +49,9 @@ Releases, then run from the extracted directory:
 
 The Release package does not require Visual Studio, MSBuild, or the .NET SDK.
 Its bundled `.esriAddinX` is version-checked and SHA-256 verified after copying.
+The installed manifest records that exact package path and hash. A late install
+failure restores the previous runtime, config, manifest, registration, locator,
+and Add-in package instead of leaving a mixed-version installation.
 
 If ArcGIS Pro is not installed under `C:\Program Files\ArcGIS\Pro`, pass
 `-ArcGISProInstallDir` or set `ARCGIS_PRO_INSTALL_DIR`. The installer also
@@ -64,6 +67,10 @@ For an MCP-runtime-only update that must not rebuild or reinstall the Add-in:
 ```powershell
 .\scripts\install.ps1 -SkipAddin
 ```
+
+This mode succeeds only when an existing Add-in has the same ID and version as
+the MCP runtime, or when no Add-in is installed. It cannot leave a known
+mixed-protocol installation.
 
 After installation, restart Codex. Restart ArcGIS Pro when the Add-in changed.
 The globally registered server is then visible in Codex/ChatGPT MCP settings
@@ -107,6 +114,11 @@ only when explicitly requested:
 ```powershell
 .\scripts\uninstall.ps1 -RemoveAddin
 ```
+
+Before deleting anything, `-RemoveAddin` verifies that the recorded package is
+inside its owned directory and still matches the recorded ID and SHA-256. If it
+was replaced after installation, uninstall stops without removing the MCP
+registration, runtime, locator, or changed Add-in.
 
 Restart Codex after uninstalling, and restart ArcGIS Pro if the Add-in was
 removed.

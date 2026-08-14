@@ -13,6 +13,7 @@ $codexHome = Join-Path $testRoot 'codex-home'
 $dataRoot = Join-Path $testRoot 'data'
 $outputRoot = Join-Path $testRoot 'output'
 $queueRoot = Join-Path $testRoot 'queue'
+$addinRoot = Join-Path $testRoot 'addin'
 $installLocatorPath = Join-Path $testRoot 'locator\install-location.json'
 
 try {
@@ -23,6 +24,7 @@ try {
         AllowedDataRoot = @($dataRoot)
         OutputRoot = $outputRoot
         QueueRoot = $queueRoot
+        AddinInstallDirectory = $addinRoot
         SkipAddin = $true
         Confirm = $false
     }

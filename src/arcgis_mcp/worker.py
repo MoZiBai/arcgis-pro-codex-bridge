@@ -34,11 +34,23 @@ def describe_spatial_reference(sr: Any) -> dict[str, Any] | None:
 
 
 def action_status(arcpy: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    raw_install = arcpy.GetInstallInfo() or {}
+    public_install_keys = (
+        "ProductName",
+        "Version",
+        "BuildNumber",
+        "LicenseLevel",
+        "LicenseType",
+        "InstallType",
+    )
     return {
-        "install": json_safe(arcpy.GetInstallInfo()),
+        "install": {
+            key: json_safe(raw_install.get(key))
+            for key in public_install_keys
+            if raw_install.get(key) not in (None, "")
+        },
         "product_info": arcpy.ProductInfo(),
-        "python": sys.version,
-        "executable": sys.executable,
+        "python": ".".join(str(value) for value in sys.version_info[:3]),
     }
 
 

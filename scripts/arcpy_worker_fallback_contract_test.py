@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.arcgis_mcp.server import ArcGISMCP
+from src.arcgis_mcp.worker import action_status
 
 
 def make_server(root: Path, *, fallback: bool = True) -> ArcGISMCP:
@@ -32,6 +33,30 @@ def make_server(root: Path, *, fallback: bool = True) -> ArcGISMCP:
 
 
 def main() -> int:
+    class FakeArcPy:
+        @staticmethod
+        def GetInstallInfo():
+            return {
+                "ProductName": "ArcGISPro",
+                "Version": "3.6.3",
+                "BuildNumber": "59527",
+                "LicenseLevel": "Advanced",
+                "Installer": "private-user",
+                "SourceDir": "C:\\Private\\Installer",
+                "InstallDate": "private-date",
+            }
+
+        @staticmethod
+        def ProductInfo():
+            return "ArcInfo"
+
+    public_status = action_status(FakeArcPy(), {})
+    if public_status["install"].get("Version") != "3.6.3":
+        raise RuntimeError(f"Filtered ArcGIS status lost required version data: {public_status}")
+    private_keys = {"Installer", "SourceDir", "InstallDate", "InstallTime"}
+    if private_keys.intersection(public_status["install"]) or "executable" in public_status:
+        raise RuntimeError(f"ArcGIS status exposed machine-private install metadata: {public_status}")
+
     with tempfile.TemporaryDirectory() as temporary:
         server = make_server(Path(temporary))
         calls: list[tuple[str, dict, int | None]] = []
@@ -97,7 +122,7 @@ def main() -> int:
     print(
         "arcpy worker fallback contract ok: Windows security blocks use the "
         "bounded ArcGIS Pro host, ordinary errors do not, config can disable it, "
-        "and the Add-in reads the stable private queue config"
+        "the Add-in reads the stable private queue config, and status filters private install metadata"
     )
     return 0
 

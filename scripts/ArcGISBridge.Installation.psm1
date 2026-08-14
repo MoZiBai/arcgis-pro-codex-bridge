@@ -115,6 +115,19 @@ function Remove-ArcGISBridgeMcpSectionText {
     return $result
 }
 
+function Get-ArcGISBridgeMcpSectionText {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+        [string]$ServerName = 'arcgis-pro'
+    )
+
+    $escaped = [regex]::Escape($ServerName)
+    $header = '(?:' + $escaped + '|"' + $escaped + '")'
+    $pattern = '(?ms)^[ \t]*\[mcp_servers\.' + $header + '(?:\.[^\]\r\n]+)?\][^\r\n]*(?:\r?\n|$).*?(?=^[ \t]*\[[^\]\r\n]+\][^\r\n]*(?:\r?\n|$)|\z)'
+    $match = [regex]::Match($Text, $pattern)
+    return $(if ($match.Success) { $match.Value } else { '' })
+}
+
 function Write-ArcGISBridgeAtomicText {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -193,7 +206,13 @@ function Set-ArcGISBridgeGlobalMcpRegistration {
 }
 
 function Remove-ArcGISBridgeGlobalMcpRegistration {
-    param([Parameter(Mandatory)][string]$CodexHome)
+    param(
+        [Parameter(Mandatory)][string]$CodexHome,
+        [string]$Command = '',
+        [string]$Server = '',
+        [string]$Config = '',
+        [string]$WorkingDirectory = ''
+    )
 
     $resolvedHome = Resolve-ArcGISBridgeCodexHome -CodexHome $CodexHome
     $configPath = Join-Path $resolvedHome 'config.toml'
@@ -201,6 +220,14 @@ function Remove-ArcGISBridgeGlobalMcpRegistration {
         return $false
     }
     $original = [System.IO.File]::ReadAllText($configPath)
+    if (-not (Test-ArcGISBridgeGlobalMcpRegistration `
+        -CodexHome $resolvedHome `
+        -Command $Command `
+        -Server $Server `
+        -Config $Config `
+        -WorkingDirectory $WorkingDirectory)) {
+        return $false
+    }
     $updated = Remove-ArcGISBridgeMcpSectionText -Text $original
     if ($updated -eq $original) {
         return $false
@@ -210,7 +237,13 @@ function Remove-ArcGISBridgeGlobalMcpRegistration {
 }
 
 function Test-ArcGISBridgeGlobalMcpRegistration {
-    param([Parameter(Mandatory)][string]$CodexHome)
+    param(
+        [Parameter(Mandatory)][string]$CodexHome,
+        [string]$Command = '',
+        [string]$Server = '',
+        [string]$Config = '',
+        [string]$WorkingDirectory = ''
+    )
 
     $resolvedHome = Resolve-ArcGISBridgeCodexHome -CodexHome $CodexHome
     $configPath = Join-Path $resolvedHome 'config.toml'
@@ -218,9 +251,98 @@ function Test-ArcGISBridgeGlobalMcpRegistration {
         return $false
     }
     $text = [System.IO.File]::ReadAllText($configPath)
-    return [regex]::IsMatch(
-        $text,
-        '(?m)^[ \t]*\[mcp_servers\.(?:arcgis-pro|"arcgis-pro")\][^\r\n]*$'
+    $section = Get-ArcGISBridgeMcpSectionText -Text $text
+    if ([string]::IsNullOrWhiteSpace($section)) {
+        return $false
+    }
+    $lineExpectations = @(
+        @{ Name = 'command'; Value = $Command; Indented = $false; Comma = $false },
+        @{ Name = 'server'; Value = $Server; Indented = $true; Comma = $true },
+        @{ Name = 'config'; Value = $Config; Indented = $true; Comma = $true },
+        @{ Name = 'cwd'; Value = $WorkingDirectory; Indented = $false; Comma = $false }
+    )
+    foreach ($expectation in $lineExpectations) {
+        if ([string]::IsNullOrWhiteSpace([string]$expectation.Value)) {
+            continue
+        }
+        $toml = [regex]::Escape((ConvertTo-ArcGISBridgeTomlString ([string]$expectation.Value)))
+        $pattern = if ($expectation.Name -in @('command', 'cwd')) {
+            '(?m)^\s*' + $expectation.Name + '\s*=\s*' + $toml + '\s*$'
+        }
+        else {
+            '(?m)^\s*' + $toml + ',?\s*$'
+        }
+        if (-not [regex]::IsMatch($section, $pattern)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-ArcGISBridgeAddinPackageInfo {
+    param(
+        [Parameter(Mandatory)][string]$Package,
+        [switch]$AllowBackupPackage
+    )
+
+    $resolvedPackage = [System.IO.Path]::GetFullPath($Package)
+    if (-not (Test-Path -LiteralPath $resolvedPackage -PathType Leaf)) {
+        throw "Add-in package was not found: $resolvedPackage"
+    }
+    $isAddinPackage = [System.IO.Path]::GetExtension($resolvedPackage) -ieq '.esriAddinX'
+    $isBackupPackage = $AllowBackupPackage -and $resolvedPackage.EndsWith(
+        '.esriAddinX.previous',
+        [StringComparison]::OrdinalIgnoreCase
+    )
+    if (-not $isAddinPackage -and -not $isBackupPackage) {
+        throw "Expected an .esriAddinX package: $resolvedPackage"
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($resolvedPackage)
+    try {
+        $entry = $archive.GetEntry('Config.daml')
+        if (-not $entry) {
+            throw 'Config.daml was not found in the Add-in package.'
+        }
+        $reader = [System.IO.StreamReader]::new($entry.Open())
+        try { $configText = $reader.ReadToEnd() }
+        finally { $reader.Dispose() }
+    }
+    finally {
+        $archive.Dispose()
+    }
+    try { $configXml = [xml]$configText }
+    catch { throw "Config.daml is not valid XML: $_" }
+    $addInInfo = $configXml.SelectSingleNode('//*[local-name()="AddInInfo"]')
+    $addInId = if ($addInInfo) { [string]$addInInfo.GetAttribute('id') } else { '' }
+    $addInVersion = if ($addInInfo) { [string]$addInInfo.GetAttribute('version') } else { '' }
+    if ([string]::IsNullOrWhiteSpace($addInId) -or
+        [string]::IsNullOrWhiteSpace($addInVersion)) {
+        throw 'Could not determine Add-in ID and version from Config.daml.'
+    }
+    return [pscustomobject]@{
+        id = $addInId
+        version = $addInVersion
+        package = $resolvedPackage
+        sha256 = (Get-FileHash -LiteralPath $resolvedPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+
+function Test-ArcGISBridgePathWithinDirectory {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$AllowDirectoryItself
+    )
+
+    $resolvedDirectory = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/')
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    if ($resolvedPath.Equals($resolvedDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+        return [bool]$AllowDirectoryItself
+    }
+    return $resolvedPath.StartsWith(
+        $resolvedDirectory + [System.IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase
     )
 }
 
@@ -327,6 +449,8 @@ Export-ModuleMember -Function @(
     'Set-ArcGISBridgeGlobalMcpRegistration',
     'Remove-ArcGISBridgeGlobalMcpRegistration',
     'Test-ArcGISBridgeGlobalMcpRegistration',
+    'Get-ArcGISBridgeAddinPackageInfo',
+    'Test-ArcGISBridgePathWithinDirectory',
     'Resolve-ArcGISBridgePython',
     'Resolve-ArcGISBridgeProInstall',
     'Assert-ArcGISBridgeSafeInstallRoot'

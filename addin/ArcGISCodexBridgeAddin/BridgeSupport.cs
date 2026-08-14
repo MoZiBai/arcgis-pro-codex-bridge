@@ -10,7 +10,7 @@ namespace ArcGISCodexBridgeAddin;
 
 internal static class BridgeSupport
 {
-    internal const string ProtocolVersion = "0.28.1";
+    internal const string ProtocolVersion = "0.28.2";
 
     internal static string ResolveInstallRoot()
     {

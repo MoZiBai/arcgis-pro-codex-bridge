@@ -68,13 +68,17 @@ try {
 finally {
     $archive.Dispose()
 }
-$packageVersionMatch = [regex]::Match($packageDaml, '<AddInInfo\s+[^>]*version="([^"]+)"')
-$packageIdMatch = [regex]::Match($packageDaml, '<AddInInfo\s+id="([^"]+)"')
-if (-not $packageVersionMatch.Success -or -not $packageIdMatch.Success) {
+try { $packageXml = [xml]$packageDaml }
+catch { throw "Packaged Config.daml is not valid XML: $_" }
+$packageAddInInfo = $packageXml.SelectSingleNode('//*[local-name()="AddInInfo"]')
+$packageVersion = if ($packageAddInInfo) { [string]$packageAddInInfo.GetAttribute('version') } else { '' }
+$packageId = if ($packageAddInInfo) { [string]$packageAddInInfo.GetAttribute('id') } else { '' }
+if ([string]::IsNullOrWhiteSpace($packageVersion) -or
+    [string]::IsNullOrWhiteSpace($packageId)) {
     throw 'Could not determine the version and ID from the Add-in package.'
 }
-if ($packageVersionMatch.Groups[1].Value -ne $Version) {
-    throw "Add-in package version $($packageVersionMatch.Groups[1].Value) does not match release $Version."
+if ($packageVersion -ne $Version) {
+    throw "Add-in package version $packageVersion does not match release $Version."
 }
 
 $releaseName = "arcgis-pro-codex-bridge-$Version-win-x64"
@@ -147,7 +151,7 @@ try {
         version = $Version
         platform = 'Windows x64'
         supported_product = 'ArcGIS Pro 3.6'
-        addin_id = $packageIdMatch.Groups[1].Value
+        addin_id = $packageId
         created_at_utc = [DateTime]::UtcNow.ToString('o')
         files = $manifestFiles
     }

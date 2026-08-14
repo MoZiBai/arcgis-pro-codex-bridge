@@ -129,6 +129,7 @@ try {
 
     $addinPackage = Join-Path $packageRoot.FullName 'prebuilt\ArcGISCodexBridgeAddin.esriAddinX'
     $addinPrivacyRoot = Join-Path $testRoot 'addin-privacy'
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $addinArchive = [System.IO.Compression.ZipFile]::OpenRead($addinPackage)
     try {
@@ -184,6 +185,19 @@ try {
     }
     $installedAddin = Get-ChildItem -LiteralPath $addinRoot -Filter '*.esriAddinX' | Select-Object -First 1
     if (-not $installedAddin) { throw 'Isolated prebuilt Add-in installation did not produce a package.' }
+    if ([string]$installManifest.addin_package -ne $installedAddin.FullName -or
+        [string]$installManifest.addin_directory -ne $addinRoot -or
+        [string]$installManifest.addin_version -ne $sourceVersion -or
+        [string]::IsNullOrWhiteSpace([string]$installManifest.addin_sha256)) {
+        throw 'Release installation manifest did not record the exact Add-in path, version, and hash.'
+    }
+
+    & (Join-Path $packageRoot.FullName 'scripts\status.ps1') `
+        -InstallRoot $installRoot `
+        -InstallLocatorPath $installLocatorPath `
+        -CodexHome $codexHome `
+        -Python $Python
+    if ($LASTEXITCODE -ne 0) { throw "Installed release status failed with exit code $LASTEXITCODE" }
 
     if (-not $Python) { $Python = [string]$installManifest.python }
     $probe = Join-Path $installRoot 'tools\mcp_probe.py'
@@ -200,10 +214,90 @@ try {
         throw "Unexpected MCP probe result: $($probeOutput -join [Environment]::NewLine)"
     }
 
+    $previousInstalledAddin = "$($installedAddin.FullName).previous"
+    Copy-Item -LiteralPath $installedAddin.FullName -Destination $previousInstalledAddin -Force
+    $previousArchive = [System.IO.Compression.ZipFile]::Open(
+        $previousInstalledAddin,
+        [System.IO.Compression.ZipArchiveMode]::Update
+    )
+    try {
+        $entry = $previousArchive.CreateEntry('transaction-existing-backup.txt')
+        $writer = [System.IO.StreamWriter]::new($entry.Open())
+        try { $writer.Write('must survive failed upgrade') }
+        finally { $writer.Dispose() }
+    }
+    finally {
+        $previousArchive.Dispose()
+    }
+    $candidateArchive = [System.IO.Compression.ZipFile]::Open(
+        $addinPackage,
+        [System.IO.Compression.ZipArchiveMode]::Update
+    )
+    try {
+        $entry = $candidateArchive.CreateEntry('transaction-new-package.txt')
+        $writer = [System.IO.StreamWriter]::new($entry.Open())
+        try { $writer.Write('forces the Add-in replacement path') }
+        finally { $writer.Dispose() }
+    }
+    finally {
+        $candidateArchive.Dispose()
+    }
+
+    $installedCodexConfig = Join-Path $codexHome 'config.toml'
+    $correctCodexConfig = [System.IO.File]::ReadAllBytes($installedCodexConfig)
+    Import-Module (Join-Path $packageRoot.FullName 'scripts\ArcGISBridge.Installation.psm1') -Force
+    Set-ArcGISBridgeGlobalMcpRegistration `
+        -CodexHome $codexHome `
+        -Command ([string]$installManifest.python) `
+        -Server (Join-Path $installRoot 'runtime\wrong-server.py') `
+        -Config ([string]$installManifest.config) `
+        -WorkingDirectory $installRoot | Out-Null
+    $previousRuntimeMarker = Join-Path $installRoot 'runtime.previous\transaction-marker.txt'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $previousRuntimeMarker) -Force | Out-Null
+    [System.IO.File]::WriteAllText($previousRuntimeMarker, 'must survive failed upgrade')
+
+    $rollbackPaths = @(
+        (Join-Path $installRoot 'runtime\server.py'),
+        $previousRuntimeMarker,
+        (Join-Path $installRoot 'config\config.json'),
+        (Join-Path $installRoot 'install.json'),
+        $installedAddin.FullName,
+        $previousInstalledAddin,
+        $installedCodexConfig,
+        $installLocatorPath
+    )
+    $rollbackHashes = @{}
+    foreach ($path in $rollbackPaths) {
+        $rollbackHashes[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    }
+    $badLocatorParent = Join-Path $testRoot 'locator-parent-is-a-file'
+    [System.IO.File]::WriteAllText($badLocatorParent, 'force failure after MCP registration')
+    $badLocatorPath = Join-Path $badLocatorParent 'install-location.json'
+    $rollbackTriggered = $false
+    try {
+        $badInstallParameters = @{} + $installParameters
+        $badInstallParameters['InstallLocatorPath'] = $badLocatorPath
+        & (Join-Path $packageRoot.FullName 'scripts\install.ps1') @badInstallParameters
+    }
+    catch {
+        $rollbackTriggered = $true
+    }
+    if (-not $rollbackTriggered) {
+        throw 'Late registration failure did not fail the transactional install test.'
+    }
+    foreach ($path in $rollbackPaths) {
+        $afterHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        if ($afterHash -ne $rollbackHashes[$path]) {
+            throw "Transactional install did not restore $path"
+        }
+    }
+    [System.IO.File]::WriteAllBytes($installedCodexConfig, $correctCodexConfig)
+
     & (Join-Path $packageRoot.FullName 'scripts\uninstall.ps1') `
         -InstallRoot $installRoot `
         -InstallLocatorPath $installLocatorPath `
         -CodexHome $codexHome `
+        -RemoveAddin `
         -Confirm:$false
     if (Test-Path -LiteralPath $installRoot) {
         throw 'Release uninstall left the isolated installation root behind.'
@@ -211,8 +305,11 @@ try {
     if (Test-Path -LiteralPath $installLocatorPath) {
         throw 'Release uninstall left the isolated install locator behind.'
     }
+    if (Test-Path -LiteralPath $addinRoot) {
+        throw 'Release uninstall left the isolated Add-in directory behind.'
+    }
 
-    Write-Output 'release lifecycle ok: exact ZIP, hashes, deep Add-in privacy scan, isolated locator, no-MSBuild prebuilt install, 253-tool MCP probe, and uninstall'
+    Write-Output 'release lifecycle ok: exact ZIP, privacy, exact Add-in state, late-failure rollback, 253-tool probe, and exact uninstall'
 }
 finally {
     $resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')

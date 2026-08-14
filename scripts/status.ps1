@@ -52,11 +52,16 @@ foreach ($entry in @(
     }
 }
 
-if (Test-ArcGISBridgeGlobalMcpRegistration -CodexHome $CodexHome) {
-    Pass "Global Codex MCP registration exists in $CodexHome"
+if (Test-ArcGISBridgeGlobalMcpRegistration `
+    -CodexHome $CodexHome `
+    -Command ([string]$manifest.python) `
+    -Server $serverPath `
+    -Config $configPath `
+    -WorkingDirectory $InstallRoot) {
+    Pass "Global Codex MCP registration exactly matches $InstallRoot"
 }
 else {
-    Fail "Global Codex MCP registration is missing from $CodexHome"
+    Fail "Global Codex MCP registration is missing or points to a different installation under $CodexHome"
 }
 
 if (Test-Path -LiteralPath $configPath) {
@@ -84,15 +89,57 @@ if (Test-Path -LiteralPath $configPath) {
     }
 }
 
-$addinRoot = Join-Path ([Environment]::GetFolderPath('MyDocuments')) `
-    ("ArcGIS\AddIns\ArcGISPro\" + [string]$manifest.addin_id)
-$addinPackage = Get-ChildItem -LiteralPath $addinRoot -Filter '*.esriAddInX' -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-if ($addinPackage) {
-    Pass "ArcGIS Pro Add-in package is installed: $($addinPackage.FullName)"
+$addinRoot = if ($manifest.PSObject.Properties.Name -contains 'addin_directory' -and $manifest.addin_directory) {
+    [System.IO.Path]::GetFullPath([string]$manifest.addin_directory)
 }
-elseif (($manifest.PSObject.Properties.Name -contains 'addin_installed') -and $manifest.addin_installed) {
-    Fail "The installation manifest expects an Add-in, but no package was found under $addinRoot"
+else {
+    Join-Path ([Environment]::GetFolderPath('MyDocuments')) `
+        ("ArcGIS\AddIns\ArcGISPro\" + [string]$manifest.addin_id)
+}
+$addinPackage = if ($manifest.PSObject.Properties.Name -contains 'addin_package' -and $manifest.addin_package) {
+    [System.IO.Path]::GetFullPath([string]$manifest.addin_package)
+}
+else {
+    Get-ChildItem -LiteralPath $addinRoot -Filter '*.esriAddInX' -File -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+$addinPathIsOwned = $true
+if ($addinPackage) {
+    if (-not (Test-ArcGISBridgePathWithinDirectory `
+        -Directory $addinRoot `
+        -Path $addinPackage)) {
+        Fail "Recorded Add-in package is outside its owned directory: $addinPackage"
+        $addinPathIsOwned = $false
+    }
+}
+if ($addinPathIsOwned -and $addinPackage -and (Test-Path -LiteralPath $addinPackage -PathType Leaf)) {
+    try {
+        $addinInfo = Get-ArcGISBridgeAddinPackageInfo -Package $addinPackage
+        if ($addinInfo.id -ne [string]$manifest.addin_id) {
+            Fail "Installed Add-in ID $($addinInfo.id) does not match $($manifest.addin_id)"
+        }
+        elseif ($addinInfo.version -ne [string]$manifest.version) {
+            Fail "Installed Add-in version $($addinInfo.version) does not match MCP $($manifest.version)"
+        }
+        elseif (($manifest.PSObject.Properties.Name -contains 'addin_version') -and
+            $manifest.addin_version -and $addinInfo.version -ne [string]$manifest.addin_version) {
+            Fail "Installed Add-in version does not match the installation manifest: $addinPackage"
+        }
+        elseif (($manifest.PSObject.Properties.Name -contains 'addin_sha256') -and
+            $manifest.addin_sha256 -and $addinInfo.sha256 -ne [string]$manifest.addin_sha256) {
+            Fail "Installed Add-in SHA-256 does not match the installation manifest: $addinPackage"
+        }
+        else {
+            Pass "ArcGIS Pro Add-in identity, version, and SHA-256 are valid: $addinPackage"
+        }
+    }
+    catch {
+        Fail "ArcGIS Pro Add-in package validation failed: $_"
+    }
+}
+elseif ($addinPathIsOwned -and
+    ($manifest.PSObject.Properties.Name -contains 'addin_installed') -and $manifest.addin_installed) {
+    Fail "The installation manifest expects an Add-in, but no package was found: $addinPackage"
 }
 else {
     Info "Add-in installation was skipped; no package was found under $addinRoot"

@@ -3,6 +3,7 @@ param(
     [string]$Package = '',
     [string]$ExpectedVersion = '',
     [string]$InstallDirectory = '',
+    [string]$InstalledPackagePath = '',
     [switch]$SkipRegistration
 )
 
@@ -53,16 +54,15 @@ finally {
     $archive.Dispose()
 }
 
-$idMatch = [regex]::Match($configText, '<AddInInfo\s+id="([^"]+)"')
-if (-not $idMatch.Success) {
-    throw 'Could not determine the AddInInfo id from Config.daml.'
+try { $configXml = [xml]$configText }
+catch { throw "Config.daml is not valid XML: $_" }
+$addInInfo = $configXml.SelectSingleNode('//*[local-name()="AddInInfo"]')
+$addInId = if ($addInInfo) { [string]$addInInfo.GetAttribute('id') } else { '' }
+$packageVersion = if ($addInInfo) { [string]$addInInfo.GetAttribute('version') } else { '' }
+if ([string]::IsNullOrWhiteSpace($addInId) -or
+    [string]::IsNullOrWhiteSpace($packageVersion)) {
+    throw 'Could not determine the AddInInfo id and version from Config.daml.'
 }
-$addInId = $idMatch.Groups[1].Value
-$versionMatch = [regex]::Match($configText, '<AddInInfo\s+[^>]*version="([^"]+)"')
-if (-not $versionMatch.Success) {
-    throw 'Could not determine the AddInInfo version from Config.daml.'
-}
-$packageVersion = $versionMatch.Groups[1].Value
 if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion) -and $packageVersion -ne $ExpectedVersion) {
     throw "Add-in package version $packageVersion does not match MCP version $ExpectedVersion."
 }
@@ -72,7 +72,20 @@ $installedDirectory = if ([string]::IsNullOrWhiteSpace($InstallDirectory)) {
 else {
     [System.IO.Path]::GetFullPath($InstallDirectory)
 }
-$installedPackage = Join-Path $installedDirectory $packageItem.Name
+$installedPackage = if ([string]::IsNullOrWhiteSpace($InstalledPackagePath)) {
+    Join-Path $installedDirectory $packageItem.Name
+}
+else {
+    $resolvedTarget = [System.IO.Path]::GetFullPath($InstalledPackagePath)
+    if ([System.IO.Path]::GetExtension($resolvedTarget) -ine '.esriAddinX' -or
+        -not (Split-Path -Parent $resolvedTarget).Equals(
+            $installedDirectory.TrimEnd('\'),
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw "Installed Add-in target must be an .esriAddinX directly under $installedDirectory"
+    }
+    $resolvedTarget
+}
 New-Item -ItemType Directory -Path $installedDirectory -Force | Out-Null
 
 $sourceHash = (Get-FileHash -LiteralPath $packageItem.FullName -Algorithm SHA256).Hash

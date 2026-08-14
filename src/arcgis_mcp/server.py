@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.28.1"
+VERSION = "0.28.2"
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = Path(__file__).with_name("worker.py")
 LOG = logging.getLogger("arcgis_mcp")
@@ -5286,7 +5286,7 @@ class ArcGISMCP:
                     session_id = result.get("bridge_session_id")
                     if not isinstance(session_id, str) or not session_id:
                         raise RuntimeError(
-                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.28.1 and restart ArcGIS Pro."
+                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.28.2 and restart ArcGIS Pro."
                         )
                     with self._live_identity_lock:
                         self._live_session_id = session_id
@@ -5670,6 +5670,21 @@ class ArcGISMCP:
             "execute_framework_command",
             "configure_framework_application",
             "manage_framework_pane",
+            "get_portal_state",
+            "inspect_time_zones",
+            "inspect_locators",
+            "geocode_location",
+            "get_operation_history",
+            "control_operation_history",
+            "geometry_engine",
+            "manage_exploratory_analysis",
+            "manage_report_elements",
+            "manage_presentation_elements",
+            "configure_specialized_renderer",
+            "inspect_printers",
+            "manage_report_composition",
+            "configure_presentation_transition",
+            "evaluate_attribute_rules",
         }
         if action not in allowed_actions:
             raise ValueError(f"Unsupported live bridge action: {action}")
@@ -5685,6 +5700,8 @@ class ArcGISMCP:
             "add_attachment",
             "update_attachment",
             "remove_attachments",
+            "control_operation_history",
+            "evaluate_attribute_rules",
         }
         if action in source_edit_actions:
             self._require_source_editing(destructive=action in {"delete_features", "remove_attachments"})
@@ -5752,6 +5769,8 @@ class ArcGISMCP:
         elif action in {"add_presentation_page", "configure_presentation_page"}:
             if payload.get("media_path"):
                 normalized["media_path"] = str(self._read_path(payload["media_path"]))
+        elif action == "manage_presentation_elements" and payload.get("media_path"):
+            normalized["media_path"] = str(self._read_path(payload["media_path"]))
         elif action == "export_presentation":
             output = self._write_path(payload["output_file"])
             if output.suffix.lower() not in {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".svg", ".svgz", ".eps", ".aix"}:
@@ -6932,43 +6951,68 @@ class ArcGISMCP:
             "live_get_operation_history": "get_operation_history",
         }
         if name in application_routes:
-            return self._run_live(application_routes[name], dict(arguments))
+            action = application_routes[name]
+            return self._run_live(action, self._prepare_live_action(action, dict(arguments)))
 
         if name == "live_control_operation_history":
-            self._require_source_editing()
-            return self._run_live("control_operation_history", dict(arguments))
+            return self._run_live(
+                "control_operation_history",
+                self._prepare_live_action("control_operation_history", dict(arguments)),
+            )
 
         if name == "live_geometry_engine":
-            return self._run_live("geometry_engine", dict(arguments))
+            return self._run_live(
+                "geometry_engine",
+                self._prepare_live_action("geometry_engine", dict(arguments)),
+            )
 
         if name == "live_manage_exploratory_analysis":
-            return self._run_live("manage_exploratory_analysis", dict(arguments))
+            return self._run_live(
+                "manage_exploratory_analysis",
+                self._prepare_live_action("manage_exploratory_analysis", dict(arguments)),
+            )
 
         if name == "live_manage_report_elements":
-            return self._run_live("manage_report_elements", dict(arguments))
+            return self._run_live(
+                "manage_report_elements",
+                self._prepare_live_action("manage_report_elements", dict(arguments)),
+            )
 
         if name == "live_manage_presentation_elements":
-            media_path = arguments.get("media_path")
-            payload = dict(arguments)
-            if media_path:
-                payload["media_path"] = str(self._read_path(str(media_path)))
-            return self._run_live("manage_presentation_elements", payload)
+            return self._run_live(
+                "manage_presentation_elements",
+                self._prepare_live_action("manage_presentation_elements", dict(arguments)),
+            )
 
         if name == "live_configure_specialized_renderer":
-            return self._run_live("configure_specialized_renderer", dict(arguments))
+            return self._run_live(
+                "configure_specialized_renderer",
+                self._prepare_live_action("configure_specialized_renderer", dict(arguments)),
+            )
 
         if name == "live_inspect_printers":
-            return self._run_live("inspect_printers", dict(arguments))
+            return self._run_live(
+                "inspect_printers",
+                self._prepare_live_action("inspect_printers", dict(arguments)),
+            )
 
         if name == "live_manage_report_composition":
-            return self._run_live("manage_report_composition", dict(arguments))
+            return self._run_live(
+                "manage_report_composition",
+                self._prepare_live_action("manage_report_composition", dict(arguments)),
+            )
 
         if name == "live_configure_presentation_transition":
-            return self._run_live("configure_presentation_transition", dict(arguments))
+            return self._run_live(
+                "configure_presentation_transition",
+                self._prepare_live_action("configure_presentation_transition", dict(arguments)),
+            )
 
         if name == "live_evaluate_attribute_rules":
-            self._require_source_editing()
-            return self._run_live("evaluate_attribute_rules", dict(arguments))
+            return self._run_live(
+                "evaluate_attribute_rules",
+                self._prepare_live_action("evaluate_attribute_rules", dict(arguments)),
+            )
 
         if name == "live_save_project_copy":
             output = self._write_path(arguments["output_aprx"])
