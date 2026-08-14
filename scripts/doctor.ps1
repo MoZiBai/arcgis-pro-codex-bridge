@@ -1,5 +1,6 @@
 param(
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ArcGISCodexBridge'),
+    [string]$InstallRoot = '',
+    [string]$InstallLocatorPath = '',
     [string]$CodexHome = '',
     [string]$Python = ''
 )
@@ -7,6 +8,7 @@ param(
 $ErrorActionPreference = 'Continue'
 & (Join-Path $PSScriptRoot 'status.ps1') `
     -InstallRoot $InstallRoot `
+    -InstallLocatorPath $InstallLocatorPath `
     -CodexHome $CodexHome `
     -Python $Python `
     -WithArcPy

@@ -10,7 +10,7 @@ Connect Codex to the currently open ArcGIS Pro project through a local MCP
 server, ArcPy, and an ArcGIS Pro SDK add-in—without mouse or keyboard automation.
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.0-486581)](docs/live-bridge-protocol-v0.28.0.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.1-486581)](docs/live-bridge-protocol-v0.28.1.md)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#security-boundaries)
 
 The current release exposes 253 MCP tools. Of these, 236 use the add-in to work
@@ -88,8 +88,8 @@ architectures and are not supported by this release.
 Download these files from GitHub Releases:
 
 ```text
-arcgis-pro-codex-bridge-0.28.0-win-x64.zip
-arcgis-pro-codex-bridge-0.28.0-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.28.1-win-x64.zip
+arcgis-pro-codex-bridge-0.28.1-win-x64.zip.sha256
 ```
 
 Verify the SHA-256 checksum, extract the ZIP, and run in PowerShell:
@@ -214,6 +214,7 @@ python .\scripts\version_contract_test.py
 python .\scripts\safety_contract_test.py
 python .\scripts\runtime_safety_contract_test.py
 python .\scripts\arcpy_worker_fallback_contract_test.py
+python .\scripts\queue_and_concurrency_contract_test.py
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_contract_test.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_lifecycle_test.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_lifecycle_test.ps1
@@ -239,8 +240,8 @@ The add-in is retained by default. Remove it explicitly with:
 ## Documentation
 
 - [Installation and lifecycle](docs/installation.md)
-- [Protocol v0.28.0](docs/live-bridge-protocol-v0.28.0.md)
+- [Protocol v0.28.1](docs/live-bridge-protocol-v0.28.1.md)
 - [Live bridge design](docs/live-bridge-design.md)
 - [Capability matrix](docs/capability-matrix.md)
 - [SDK coverage audit](docs/sdk-coverage-audit-v0.27.md)
-- [Release notes v0.28.0](docs/release-v0.28.0.md)
+- [Release notes v0.28.1](docs/release-v0.28.1.md)

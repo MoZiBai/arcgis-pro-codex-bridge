@@ -19,6 +19,9 @@ namespace ArcGISCodexBridgeAddin;
 internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
 {
     private static readonly string QueueRoot = BridgeSupport.ResolveQueueRoot();
+    private static readonly string SessionId = Guid.NewGuid().ToString("N");
+    private static readonly TimeSpan CompletedRetention = TimeSpan.FromHours(24);
+    private static readonly TimeSpan CancellationRetention = TimeSpan.FromHours(1);
 
     private CancellationTokenSource? _cancellation;
     private Task? _worker;
@@ -41,13 +44,24 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
         var jobs = Directory.CreateDirectory(Path.Combine(QueueRoot, "jobs")).FullName;
         var processing = Directory.CreateDirectory(Path.Combine(QueueRoot, "processing")).FullName;
         var results = Directory.CreateDirectory(Path.Combine(QueueRoot, "results")).FullName;
+        var cancellations = Directory.CreateDirectory(Path.Combine(QueueRoot, "cancellations")).FullName;
+        var completed = Directory.CreateDirectory(Path.Combine(QueueRoot, "completed")).FullName;
 
         await RecoverInterruptedJobsAsync(processing, results, cancellationToken);
+        CleanupQueueArtifacts(cancellations, CancellationRetention);
+        CleanupQueueArtifacts(completed, CompletedRetention);
+        var nextCleanup = DateTime.UtcNow.AddHours(1);
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
+                if (DateTime.UtcNow >= nextCleanup)
+                {
+                    CleanupQueueArtifacts(cancellations, CancellationRetention);
+                    CleanupQueueArtifacts(completed, CompletedRetention);
+                    nextCleanup = DateTime.UtcNow.AddHours(1);
+                }
                 foreach (var jobPath in Directory.EnumerateFiles(jobs, "*.json").OrderBy(File.GetCreationTimeUtc))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -61,7 +75,12 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
                         continue;
                     }
 
-                    await ProcessJobAsync(claimedPath, results, cancellationToken);
+                    await ProcessJobAsync(
+                        claimedPath,
+                        results,
+                        cancellations,
+                        completed,
+                        cancellationToken);
                 }
             }
             catch (OperationCanceledException)
@@ -93,7 +112,8 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
         foreach (var path in Directory.EnumerateFiles(processingDirectory, "*.json"))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var jobId = Path.GetFileNameWithoutExtension(path);
+            var filenameId = SafeIdentifier(Path.GetFileNameWithoutExtension(path), "job");
+            var jobId = filenameId;
             try
             {
                 await using var stream = File.OpenRead(path);
@@ -110,6 +130,7 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
             {
                 // The filename remains a valid fallback job identifier.
             }
+            jobId = SafeIdentifier(jobId, filenameId);
 
             var resultPath = Path.Combine(resultsDirectory, jobId + ".json");
             var temporaryPath = resultPath + ".tmp";
@@ -118,6 +139,8 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
                 ok = false,
                 error = "The previous ArcGIS Pro process ended while this bridge action was running. The interrupted job was recovered at startup.",
                 type = "InterruptedBridgeJob",
+                bridge_session_id = SessionId,
+                project_path = CurrentProjectPath(),
             });
             await File.WriteAllTextAsync(temporaryPath, response, cancellationToken);
             File.Move(temporaryPath, resultPath, true);
@@ -128,58 +151,211 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
     private static async Task ProcessJobAsync(
         string claimedPath,
         string resultsDirectory,
+        string cancellationsDirectory,
+        string completedDirectory,
         CancellationToken cancellationToken)
     {
-        string jobId = Path.GetFileNameWithoutExtension(claimedPath);
-        object response;
+        var filenameId = SafeIdentifier(Path.GetFileNameWithoutExtension(claimedPath), "job");
+        var jobId = filenameId;
+        var idempotencyKey = filenameId;
+        string responseJson;
 
         try
         {
             await using var stream = File.OpenRead(claimedPath);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
             var root = document.RootElement;
-            jobId = root.GetProperty("id").GetString() ?? jobId;
+            jobId = SafeIdentifier(root.GetProperty("id").GetString(), filenameId);
+            idempotencyKey = SafeIdentifier(
+                root.TryGetProperty("idempotency_key", out var key) ? key.GetString() : null,
+                jobId);
+            var completedPath = Path.Combine(completedDirectory, idempotencyKey + ".json");
+            if (File.Exists(completedPath))
+            {
+                responseJson = await File.ReadAllTextAsync(completedPath, cancellationToken);
+                await WriteResultAsync(resultsDirectory, jobId, responseJson, cancellationToken);
+                File.Delete(claimedPath);
+                return;
+            }
+
             var action = root.GetProperty("action").GetString() ?? string.Empty;
             var payload = root.TryGetProperty("payload", out var payloadElement)
                 ? payloadElement.Clone()
                 : default;
-            var result = await DispatchAsync(action, payload, cancellationToken);
-            response = new { ok = true, result };
-        }
-        catch (Exception exception)
-        {
-            response = new
-            {
-                ok = false,
-                error = exception.Message,
-                type = exception.GetType().Name,
-                detail = exception.ToString(),
-            };
-        }
+            ValidateJobEnvelope(root, action);
 
-        string responseJson;
-        try
-        {
-            responseJson = JsonSerializer.Serialize(response);
+            var cancellationPath = Path.Combine(cancellationsDirectory, jobId + ".json");
+            if (File.Exists(cancellationPath))
+            {
+                throw new OperationCanceledException("The bridge request was cancelled before execution.");
+            }
+
+            using var actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var watcher = WatchCancellationAsync(
+                cancellationPath,
+                actionCancellation,
+                cancellationToken);
+            try
+            {
+                var result = await DispatchAsync(action, payload, actionCancellation.Token);
+                responseJson = JsonSerializer.Serialize(new
+                {
+                    ok = true,
+                    result,
+                    bridge_session_id = SessionId,
+                    project_path = CurrentProjectPath(),
+                });
+            }
+            finally
+            {
+                actionCancellation.Cancel();
+                try { await watcher; } catch (OperationCanceledException) { }
+            }
         }
         catch (Exception exception)
         {
             responseJson = JsonSerializer.Serialize(new
             {
                 ok = false,
-                error = $"Bridge response serialization failed: {exception.Message}",
+                error = exception.Message,
                 type = exception.GetType().Name,
+                detail = exception.ToString(),
+                bridge_session_id = SessionId,
+                project_path = CurrentProjectPath(),
             });
         }
 
-        var resultPath = Path.Combine(resultsDirectory, jobId + ".json");
-        var temporaryPath = resultPath + ".tmp";
-        await File.WriteAllTextAsync(
-            temporaryPath,
+        var cachePath = Path.Combine(completedDirectory, idempotencyKey + ".json");
+        await WriteAtomicAsync(cachePath, responseJson, cancellationToken);
+        await WriteResultAsync(resultsDirectory, jobId, responseJson, cancellationToken);
+        File.Delete(claimedPath);
+    }
+
+    private static void ValidateJobEnvelope(JsonElement root, string action)
+    {
+        if (!root.TryGetProperty("expires_at", out var expires)
+            || expires.ValueKind != JsonValueKind.Number
+            || !expires.TryGetDouble(out var expiresAt)
+            || DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0 >= expiresAt)
+        {
+            throw new TimeoutException("The bridge request expired before ArcGIS Pro claimed it.");
+        }
+        if (action is "status" or "capabilities")
+        {
+            return;
+        }
+        var expectedSession = root.TryGetProperty("expected_session_id", out var session)
+            && session.ValueKind == JsonValueKind.String
+                ? session.GetString()
+                : null;
+        if (string.IsNullOrWhiteSpace(expectedSession)
+            || !string.Equals(expectedSession, SessionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "ArcGIS Pro restarted after this request was created; refusing delayed execution.");
+        }
+        var expectedProject = root.TryGetProperty("expected_project_path", out var project)
+            && project.ValueKind == JsonValueKind.String
+                ? project.GetString()
+                : null;
+        if (!SameProject(expectedProject, CurrentProjectPath()))
+        {
+            throw new InvalidOperationException(
+                "The open ArcGIS Pro project changed after this request was created; refusing execution.");
+        }
+    }
+
+    private static async Task WatchCancellationAsync(
+        string cancellationPath,
+        CancellationTokenSource actionCancellation,
+        CancellationToken bridgeCancellation)
+    {
+        while (!actionCancellation.IsCancellationRequested
+            && !bridgeCancellation.IsCancellationRequested)
+        {
+            if (File.Exists(cancellationPath))
+            {
+                actionCancellation.Cancel();
+                return;
+            }
+            await Task.Delay(100, bridgeCancellation);
+        }
+    }
+
+    private static async Task WriteResultAsync(
+        string resultsDirectory,
+        string jobId,
+        string responseJson,
+        CancellationToken cancellationToken)
+    {
+        await WriteAtomicAsync(
+            Path.Combine(resultsDirectory, SafeIdentifier(jobId, "job") + ".json"),
             responseJson,
             cancellationToken);
-        File.Move(temporaryPath, resultPath, true);
-        File.Delete(claimedPath);
+    }
+
+    private static async Task WriteAtomicAsync(
+        string path,
+        string content,
+        CancellationToken cancellationToken)
+    {
+        var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        await File.WriteAllTextAsync(temporaryPath, content, cancellationToken);
+        File.Move(temporaryPath, path, true);
+    }
+
+    private static string SafeIdentifier(string? value, string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(value)
+            && value.Length <= 128
+            && value.All(character => char.IsLetterOrDigit(character)
+                || character is '-' or '_'))
+        {
+            return value;
+        }
+        return fallback;
+    }
+
+    private static string? CurrentProjectPath()
+    {
+        return string.IsNullOrWhiteSpace(Project.Current?.Path) ? null : Project.Current.Path;
+    }
+
+    private static bool SameProject(string? left, string? right)
+    {
+        if (string.IsNullOrWhiteSpace(left) || string.IsNullOrWhiteSpace(right))
+        {
+            return string.IsNullOrWhiteSpace(left) && string.IsNullOrWhiteSpace(right);
+        }
+        try
+        {
+            left = Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar);
+            right = Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar);
+        }
+        catch
+        {
+            return false;
+        }
+        return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void CleanupQueueArtifacts(string directory, TimeSpan retention)
+    {
+        var cutoff = DateTime.UtcNow - retention;
+        foreach (var path in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            try
+            {
+                if (File.GetLastWriteTimeUtc(path) < cutoff)
+                {
+                    File.Delete(path);
+                }
+            }
+            catch
+            {
+                // Cleanup is best effort and never disables the live bridge.
+            }
+        }
     }
 
     private static Task<object> DispatchAsync(

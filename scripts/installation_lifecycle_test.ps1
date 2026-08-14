@@ -13,10 +13,12 @@ $codexHome = Join-Path $testRoot 'codex-home'
 $dataRoot = Join-Path $testRoot 'data'
 $outputRoot = Join-Path $testRoot 'output'
 $queueRoot = Join-Path $testRoot 'queue'
+$installLocatorPath = Join-Path $testRoot 'locator\install-location.json'
 
 try {
     $installParameters = @{
         InstallRoot = $installRoot
+        InstallLocatorPath = $installLocatorPath
         CodexHome = $codexHome
         AllowedDataRoot = @($dataRoot)
         OutputRoot = $outputRoot
@@ -31,17 +33,22 @@ try {
 
     & (Join-Path $PSScriptRoot 'status.ps1') `
         -InstallRoot $installRoot `
+        -InstallLocatorPath $installLocatorPath `
         -CodexHome $codexHome `
         -Python $Python
     if ($LASTEXITCODE -ne 0) { throw "Isolated status failed with exit code $LASTEXITCODE" }
 
     & (Join-Path $PSScriptRoot 'uninstall.ps1') `
         -InstallRoot $installRoot `
+        -InstallLocatorPath $installLocatorPath `
         -CodexHome $codexHome `
         -Confirm:$false
     if ($LASTEXITCODE -ne 0) { throw "Isolated uninstall failed with exit code $LASTEXITCODE" }
     if (Test-Path -LiteralPath $installRoot) {
         throw 'Isolated uninstall left the installation root behind.'
+    }
+    if (Test-Path -LiteralPath $installLocatorPath) {
+        throw 'Isolated uninstall left the install locator behind.'
     }
 
     Write-Output 'installation lifecycle ok: isolated install, global registration, probe, status, and uninstall'

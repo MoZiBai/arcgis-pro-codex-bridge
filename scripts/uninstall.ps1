@@ -1,6 +1,7 @@
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param(
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ArcGISCodexBridge'),
+    [string]$InstallRoot = '',
+    [string]$InstallLocatorPath = '',
     [string]$CodexHome = '',
     [switch]$RemoveAddin
 )
@@ -9,6 +10,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'ArcGISBridge.Installation.psm1') -Force
 
+$InstallRoot = Resolve-ArcGISBridgeInstallRoot `
+    -InstallRoot $InstallRoot `
+    -InstallLocatorPath $InstallLocatorPath
 $InstallRoot = Assert-ArcGISBridgeSafeInstallRoot -InstallRoot $InstallRoot
 $CodexHome = Resolve-ArcGISBridgeCodexHome -CodexHome $CodexHome
 $manifestPath = Join-Path $InstallRoot 'install.json'
@@ -51,6 +55,16 @@ if ($RemoveAddin) {
 if ((Test-Path -LiteralPath $InstallRoot) -and $PSCmdlet.ShouldProcess($InstallRoot, 'Remove installed bridge runtime and private config')) {
     Remove-Item -LiteralPath $InstallRoot -Recurse -Force
     Write-Output "[PASS] Removed bridge installation: $InstallRoot"
+}
+if ($PSCmdlet.ShouldProcess(
+    (Get-ArcGISBridgeInstallLocatorPath -InstallLocatorPath $InstallLocatorPath),
+    'Remove matching bridge install locator'
+)) {
+    if (Remove-ArcGISBridgeInstallLocator `
+        -InstallRoot $InstallRoot `
+        -InstallLocatorPath $InstallLocatorPath) {
+        Write-Output '[PASS] Removed matching Add-in install locator.'
+    }
 }
 
 Write-Output 'Restart Codex after uninstalling. Restart ArcGIS Pro if the Add-in was removed.'

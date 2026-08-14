@@ -29,9 +29,12 @@ and the live-bridge queue. The installer also:
 
 The installed MCP points to the stable runtime rather than the Git clone, so
 moving or deleting the source checkout does not break the registration.
-The Add-in reads `live_bridge_queue` from the stable private config (with
-`ARCGIS_CODEX_BRIDGE_QUEUE` as an explicit override), so upgrades retain an
-existing queue without a machine-wide environment change.
+The installer writes the active installation root to
+`%LOCALAPPDATA%\ArcGISCodexBridge\install-location.json`. The Add-in follows
+that locator to the stable private config and installed `runtime\worker.py`, so
+custom `-InstallRoot` installations work without embedding a machine-specific
+path in the Add-in. `ARCGIS_CODEX_BRIDGE_INSTALL_ROOT` and
+`ARCGIS_CODEX_BRIDGE_QUEUE` remain explicit process-level overrides.
 
 ## Install
 

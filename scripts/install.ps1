@@ -1,6 +1,7 @@
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ArcGISCodexBridge'),
+    [string]$InstallRoot = '',
+    [string]$InstallLocatorPath = '',
     [string]$CodexHome = '',
     [string]$Python = '',
     [string]$ArcGISProInstallDir = '',
@@ -22,6 +23,9 @@ $ErrorActionPreference = 'Stop'
 $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'ArcGISBridge.Installation.psm1') -Force
 
+$InstallRoot = Resolve-ArcGISBridgeInstallRoot `
+    -InstallRoot $InstallRoot `
+    -InstallLocatorPath $InstallLocatorPath
 $InstallRoot = Assert-ArcGISBridgeSafeInstallRoot -InstallRoot $InstallRoot
 $CodexHome = Resolve-ArcGISBridgeCodexHome -CodexHome $CodexHome
 $Python = Resolve-ArcGISBridgePython -Python $Python
@@ -245,7 +249,12 @@ finally {
     }
 }
 
+$locatorPath = Set-ArcGISBridgeInstallLocator `
+    -InstallRoot $InstallRoot `
+    -InstallLocatorPath $InstallLocatorPath
+
 Write-Output "[PASS] Installed ArcGIS Pro MCP bridge $version at $InstallRoot"
+Write-Output "[PASS] Wrote Add-in install locator: $locatorPath"
 if (-not $SkipGlobalRegistration) {
     Write-Output "[PASS] Registered global Codex MCP: arcgis-pro"
 }

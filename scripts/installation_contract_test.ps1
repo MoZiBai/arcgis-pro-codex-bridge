@@ -71,7 +71,34 @@ args = ["serve"]
         throw 'Add-in installer must tolerate RegisterAddIn returning no exit code while Pro is open.'
     }
 
-    Write-Output 'installation contract ok: global apply/remove is idempotent, unrelated config is preserved, and open-Pro registration is restart-safe'
+    $locatorPath = Join-Path $root 'locator\install-location.json'
+    $customRoot = Join-Path $root 'custom-install'
+    $differentRoot = Join-Path $root 'different-install'
+    Set-ArcGISBridgeInstallLocator `
+        -InstallRoot $customRoot `
+        -InstallLocatorPath $locatorPath | Out-Null
+    $resolvedRoot = Resolve-ArcGISBridgeInstallRoot -InstallLocatorPath $locatorPath
+    if (-not $resolvedRoot.Equals(
+        [System.IO.Path]::GetFullPath($customRoot).TrimEnd('\'),
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Custom install locator did not resolve correctly: $resolvedRoot"
+    }
+    if (Remove-ArcGISBridgeInstallLocator `
+        -InstallRoot $differentRoot `
+        -InstallLocatorPath $locatorPath) {
+        throw 'Install locator removed itself for a non-matching installation root.'
+    }
+    if (-not (Test-Path -LiteralPath $locatorPath)) {
+        throw 'Non-matching uninstall damaged the active install locator.'
+    }
+    if (-not (Remove-ArcGISBridgeInstallLocator `
+        -InstallRoot $customRoot `
+        -InstallLocatorPath $locatorPath)) {
+        throw 'Matching uninstall did not remove the install locator.'
+    }
+
+    Write-Output 'installation contract ok: global config is preserved, Add-in registration is restart-safe, and custom install locators are conditional'
 }
 finally {
     if (Test-Path -LiteralPath $root) {

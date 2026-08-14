@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -14,10 +16,15 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.28.0"
+VERSION = "0.28.1"
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = Path(__file__).with_name("worker.py")
 LOG = logging.getLogger("arcgis_mcp")
+EMIT_LOCK = threading.Lock()
+
+
+class RequestCancelled(RuntimeError):
+    pass
 
 SERVER_INSTRUCTIONS = (
     "Use this ArcGIS Pro server only when the user's request clearly involves "
@@ -4668,9 +4675,32 @@ class ArcGISMCP:
         self.live_arcpy_worker_fallback = bool(
             self.config.get("live_arcpy_worker_fallback", True)
         )
+        self._request_local = threading.local()
+        self._live_identity_lock = threading.RLock()
+        self._live_session_id: str | None = None
+        self._live_project_path: str | None = None
         self._framework_registry_cache: list[dict[str, Any]] | None = None
-        for name in ("jobs", "results", "processing"):
+        for name in ("jobs", "results", "processing", "cancellations", "completed"):
             (self.live_queue / name).mkdir(parents=True, exist_ok=True)
+
+    def execute_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        cancellation: threading.Event,
+    ) -> Any:
+        self._request_local.cancellation = cancellation
+        try:
+            if cancellation.is_set():
+                raise RequestCancelled("MCP request was cancelled")
+            return self.call_tool(name, arguments)
+        finally:
+            self._request_local.cancellation = None
+
+    def _check_cancelled(self) -> None:
+        cancellation = getattr(self._request_local, "cancellation", None)
+        if cancellation is not None and cancellation.is_set():
+            raise RequestCancelled("MCP request was cancelled")
 
     @staticmethod
     def _load_config(path: Path) -> dict[str, Any]:
@@ -5135,26 +5165,54 @@ class ArcGISMCP:
         if not self.arcgis_python.exists():
             raise FileNotFoundError(f"ArcGIS Python launcher not found: {self.arcgis_python}")
         request = {"action": action, "payload": payload}
+        process: subprocess.Popen[str] | None = None
         try:
-            completed = subprocess.run(
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            process = subprocess.Popen(
                 self._worker_command(),
                 # ArcGIS Pro's propy.bat inherits a Windows code page. ASCII-only
                 # JSON keeps stdin/stdout stable regardless of that code page.
-                input=json.dumps(request, ensure_ascii=True),
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                capture_output=True,
-                timeout=self.timeout,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 cwd=str(ROOT),
-                check=False,
+                creationflags=creationflags,
             )
-            stdout = completed.stdout.strip()
-            if completed.returncode != 0:
-                detail = completed.stderr.strip() or stdout or f"exit code {completed.returncode}"
+            input_text: str | None = json.dumps(request, ensure_ascii=True)
+            deadline = time.monotonic() + self.timeout
+            while True:
+                self._check_cancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._terminate_process_tree(process)
+                    raise TimeoutError(
+                        f"ArcGIS worker exceeded the {self.timeout}-second timeout"
+                    )
+                try:
+                    stdout, stderr = process.communicate(
+                        input=input_text,
+                        timeout=min(0.2, remaining),
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    input_text = None
+                    continue
+                except BaseException:
+                    self._terminate_process_tree(process)
+                    raise
+            stdout = stdout.strip()
+            if process.returncode != 0:
+                detail = stderr.strip() or stdout or f"exit code {process.returncode}"
                 raise RuntimeError(f"ArcGIS worker failed: {detail}")
-            return self._worker_result(stdout, completed.stderr)
+            return self._worker_result(stdout, stderr)
         except Exception as direct_error:
+            if process is not None:
+                self._terminate_process_tree(process)
             if not self.live_arcpy_worker_fallback or not self._windows_security_block(direct_error):
                 raise
             try:
@@ -5164,39 +5222,108 @@ class ArcGISMCP:
                     f"{direct_error}\nArcGIS Pro ArcPy fallback also failed: {live_error}"
                 ) from live_error
 
+    @staticmethod
+    def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=10,
+                )
+            else:
+                process.kill()
+            process.wait(timeout=10)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
     def _run_live(
         self,
         action: str,
         payload: dict[str, Any],
         timeout_seconds: int | None = None,
+        _bind_identity: bool = True,
     ) -> Any:
+        timeout = self.live_timeout if timeout_seconds is None else timeout_seconds
+        expected_session: str | None = None
+        expected_project: str | None = None
+        if _bind_identity and action not in {"status", "capabilities"}:
+            expected_session, expected_project = self._live_identity()
+
         job_id = uuid.uuid4().hex
-        job = {"id": job_id, "action": action, "payload": payload, "created_at": time.time()}
+        now = time.time()
+        job = {
+            "id": job_id,
+            "idempotency_key": uuid.uuid4().hex,
+            "action": action,
+            "payload": payload,
+            "created_at": now,
+            "expires_at": now + timeout,
+            "expected_session_id": expected_session,
+            "expected_project_path": expected_project,
+        }
         temp_path = self.live_queue / "jobs" / f".{job_id}.tmp"
         job_path = self.live_queue / "jobs" / f"{job_id}.json"
         result_path = self.live_queue / "results" / f"{job_id}.json"
+        cancellation_path = self.live_queue / "cancellations" / f"{job_id}.json"
         temp_path.write_text(json.dumps(job, ensure_ascii=True), encoding="ascii")
         temp_path.replace(job_path)
 
-        deadline = time.monotonic() + (
-            self.live_timeout if timeout_seconds is None else timeout_seconds
-        )
-        while time.monotonic() < deadline:
-            if result_path.exists():
-                result = json.loads(result_path.read_text(encoding="utf-8"))
-                result_path.unlink(missing_ok=True)
-                if not result.get("ok"):
-                    error = result.get("error", "ArcGIS Pro live bridge error")
-                    detail = result.get("detail")
-                    if detail and detail != error:
-                        error = f"{error}\n{detail}"
-                    raise RuntimeError(error)
-                return result.get("result")
-            time.sleep(0.2)
-        raise TimeoutError(
-            "ArcGIS Pro live bridge did not respond. Ensure ArcGIS Pro is open, a project is loaded, "
-            "and the ArcGIS Codex Bridge add-in is installed and enabled."
-        )
+        deadline = time.monotonic() + timeout
+        try:
+            while time.monotonic() < deadline:
+                self._check_cancelled()
+                if result_path.exists():
+                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                    result_path.unlink(missing_ok=True)
+                    session_id = result.get("bridge_session_id")
+                    if not isinstance(session_id, str) or not session_id:
+                        raise RuntimeError(
+                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.28.1 and restart ArcGIS Pro."
+                        )
+                    with self._live_identity_lock:
+                        self._live_session_id = session_id
+                        self._live_project_path = result.get("project_path")
+                    if not result.get("ok"):
+                        error = result.get("error", "ArcGIS Pro live bridge error")
+                        detail = result.get("detail")
+                        if detail and detail != error:
+                            error = f"{error}\n{detail}"
+                        raise RuntimeError(error)
+                    return result.get("result")
+                time.sleep(0.1)
+            raise TimeoutError(
+                "ArcGIS Pro live bridge did not respond. Ensure ArcGIS Pro is open, a project is loaded, "
+                "and the ArcGIS Codex Bridge add-in is installed and enabled."
+            )
+        except (TimeoutError, RequestCancelled):
+            job_path.unlink(missing_ok=True)
+            cancellation_temp = cancellation_path.with_suffix(".tmp")
+            cancellation_temp.write_text(
+                json.dumps({"id": job_id, "cancelled_at": time.time()}),
+                encoding="ascii",
+            )
+            cancellation_temp.replace(cancellation_path)
+            result_path.unlink(missing_ok=True)
+            raise
+
+    def _live_identity(self) -> tuple[str, str | None]:
+        with self._live_identity_lock:
+            if self._live_session_id:
+                return self._live_session_id, self._live_project_path
+            status = self._run_live("status", {}, _bind_identity=False)
+            if not isinstance(status, dict):
+                raise RuntimeError("ArcGIS Pro returned an invalid status handshake")
+            if not self._live_session_id:
+                raise RuntimeError("ArcGIS Pro did not return a live bridge session identifier")
+            return self._live_session_id, self._live_project_path
 
     def _validate_tool_name(self, tool: str) -> re.Match[str]:
         match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z][A-Za-z0-9_]*)", tool)
@@ -6881,54 +7008,117 @@ def response(request_id: Any, result: Any = None, error: dict[str, Any] | None =
 
 def emit(message: dict[str, Any]) -> None:
     encoded = (json.dumps(message, ensure_ascii=True) + "\n").encode("utf-8")
-    sys.stdout.buffer.write(encoded)
-    sys.stdout.buffer.flush()
+    with EMIT_LOCK:
+        sys.stdout.buffer.write(encoded)
+        sys.stdout.buffer.flush()
 
 
 def serve(server: ArcGISMCP) -> None:
     # MCP stdio transport is UTF-8. Reading the binary stream avoids the
     # system GBK code page corrupting Chinese dataset and folder names.
-    for raw_bytes in sys.stdin.buffer:
-        raw_line = raw_bytes.decode("utf-8").strip()
-        if not raw_line:
-            continue
-        request_id = None
+    pending: dict[Any, tuple[threading.Event, concurrent.futures.Future[Any]]] = {}
+    pending_lock = threading.Lock()
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(32, (os.cpu_count() or 4) + 4),
+        thread_name_prefix="arcgis-mcp",
+    )
+
+    def finish_tool(request_id: Any, future: concurrent.futures.Future[Any]) -> None:
+        with pending_lock:
+            pending.pop(request_id, None)
         try:
-            request = json.loads(raw_line)
-            request_id = request.get("id")
-            method = request.get("method")
-            params = request.get("params") or {}
-
-            if method == "initialize":
-                result = {
-                    "protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                    "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "arcgis-pro-mcp", "version": VERSION},
-                    "instructions": SERVER_INSTRUCTIONS,
-                }
-            elif method == "ping":
-                result = {}
-            elif method == "tools/list":
-                result = {"tools": TOOLS}
-            elif method == "tools/call":
-                tool_result = server.call_tool(params["name"], params.get("arguments") or {})
-                text = json.dumps(tool_result, ensure_ascii=False, indent=2, default=str)
-                result = {"content": [{"type": "text", "text": text}], "isError": False}
-            elif method in {"notifications/initialized", "notifications/cancelled"}:
-                continue
-            else:
-                if request_id is None:
-                    continue
-                emit(response(request_id, error={"code": -32601, "message": f"Method not found: {method}"}))
-                continue
-
-            if request_id is not None:
-                emit(response(request_id, result=result))
+            tool_result = future.result()
+            text = json.dumps(tool_result, ensure_ascii=False, indent=2, default=str)
+            result = {"content": [{"type": "text", "text": text}], "isError": False}
+            emit(response(request_id, result=result))
         except Exception as exc:
-            LOG.exception("Request failed")
-            if request_id is not None:
-                error = {"code": -32000, "message": str(exc), "data": {"type": type(exc).__name__}}
-                emit(response(request_id, error=error))
+            if isinstance(exc, RequestCancelled):
+                LOG.info("Tool request cancelled: %s", request_id)
+            else:
+                LOG.exception("Tool request failed")
+            emit(response(request_id, error={
+                "code": -32800 if isinstance(exc, RequestCancelled) else -32000,
+                "message": str(exc),
+                "data": {"type": type(exc).__name__},
+            }))
+
+    try:
+        input_stream = sys.stdin.buffer
+        for raw_bytes in input_stream:
+            raw_line = raw_bytes.decode("utf-8").strip()
+            if not raw_line:
+                continue
+            request_id = None
+            try:
+                request = json.loads(raw_line)
+                request_id = request.get("id")
+                method = request.get("method")
+                params = request.get("params") or {}
+
+                if method == "initialize":
+                    result = {
+                        "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                        "capabilities": {"tools": {"listChanged": False}},
+                        "serverInfo": {"name": "arcgis-pro-mcp", "version": VERSION},
+                        "instructions": SERVER_INSTRUCTIONS,
+                    }
+                elif method == "ping":
+                    result = {}
+                elif method == "tools/list":
+                    result = {"tools": TOOLS}
+                elif method == "tools/call":
+                    if request_id is None:
+                        continue
+                    cancellation = threading.Event()
+                    future = executor.submit(
+                        server.execute_tool,
+                        params["name"],
+                        params.get("arguments") or {},
+                        cancellation,
+                    )
+                    with pending_lock:
+                        pending[request_id] = (cancellation, future)
+                    future.add_done_callback(
+                        lambda completed, current_id=request_id: finish_tool(
+                            current_id, completed
+                        )
+                    )
+                    continue
+                elif method == "notifications/cancelled":
+                    cancelled_id = params.get("requestId")
+                    with pending_lock:
+                        pending_request = pending.get(cancelled_id)
+                    if pending_request:
+                        pending_request[0].set()
+                    continue
+                elif method == "notifications/initialized":
+                    continue
+                else:
+                    if request_id is None:
+                        continue
+                    emit(response(request_id, error={
+                        "code": -32601,
+                        "message": f"Method not found: {method}",
+                    }))
+                    continue
+
+                if request_id is not None:
+                    emit(response(request_id, result=result))
+            except Exception as exc:
+                LOG.exception("Request failed")
+                if request_id is not None:
+                    error = {
+                        "code": -32000,
+                        "message": str(exc),
+                        "data": {"type": type(exc).__name__},
+                    }
+                    emit(response(request_id, error=error))
+    finally:
+        with pending_lock:
+            outstanding = list(pending.values())
+        for cancellation, _ in outstanding:
+            cancellation.set()
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def main() -> int:

@@ -45,5 +45,17 @@ $env:MSBuildSDKsPath = $sdkRoot
 $env:DOTNET_HOST_PATH = $dotnet
 $env:MSBuildEnableWorkloadResolver = 'false'
 
-& $MSBuild $project -restore -t:Build -p:Configuration=$Configuration -p:Platform=x64 "-p:ArcGISProInstallDir=$ArcGISProInstallDir\"
+# Esri's packaging target can retain files in obj/.../temp_archive even after a
+# normal MSBuild clean. Remove only these resolved build artifacts so an old PDB
+# cannot be carried into a new Release package.
+$projectRoot = Split-Path -Parent $project
+$staleArchive = Join-Path $projectRoot "obj\x64\$Configuration\temp_archive"
+$stalePackage = Join-Path $projectRoot "bin\x64\$Configuration\ArcGISCodexBridgeAddin.esriAddinX"
+foreach ($artifact in @($staleArchive, $stalePackage)) {
+    if (Test-Path -LiteralPath $artifact) {
+        Remove-Item -LiteralPath $artifact -Recurse -Force
+    }
+}
+
+& $MSBuild $project -restore -t:Rebuild -p:Configuration=$Configuration -p:Platform=x64 "-p:ArcGISProInstallDir=$ArcGISProInstallDir\"
 exit $LASTEXITCODE

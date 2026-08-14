@@ -10,7 +10,7 @@
 ArcGIS Pro 项目，无需鼠标键盘自动化。
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.0-486581)](docs/live-bridge-protocol-v0.28.0.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.1-486581)](docs/live-bridge-protocol-v0.28.1.md)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
 
 当前版本提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
@@ -70,8 +70,8 @@ ArcMap / ArcGIS Desktop 10.2–10.8 使用不同的 Python、ArcObjects 和 Add-
 推荐从 GitHub Releases 下载：
 
 ```text
-arcgis-pro-codex-bridge-0.28.0-win-x64.zip
-arcgis-pro-codex-bridge-0.28.0-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.28.1-win-x64.zip
+arcgis-pro-codex-bridge-0.28.1-win-x64.zip.sha256
 ```
 
 验证 SHA-256 后解压，在 PowerShell 中运行：
@@ -186,6 +186,7 @@ python .\scripts\version_contract_test.py
 python .\scripts\safety_contract_test.py
 python .\scripts\runtime_safety_contract_test.py
 python .\scripts\arcpy_worker_fallback_contract_test.py
+python .\scripts\queue_and_concurrency_contract_test.py
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_contract_test.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_lifecycle_test.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_lifecycle_test.ps1
@@ -209,8 +210,8 @@ Release 生命周期测试在临时目录中完成解压、逐文件哈希验证
 ## 文档
 
 - [安装与生命周期](docs/installation.md)
-- [v0.28.0 协议](docs/live-bridge-protocol-v0.28.0.md)
+- [v0.28.1 协议](docs/live-bridge-protocol-v0.28.1.md)
 - [实时桥接设计](docs/live-bridge-design.md)
 - [能力矩阵](docs/capability-matrix.md)
 - [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)
-- [v0.28.0 Release 说明](docs/release-v0.28.0.md)
+- [v0.28.1 Release 说明](docs/release-v0.28.1.md)

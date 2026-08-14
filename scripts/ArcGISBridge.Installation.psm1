@@ -17,6 +17,80 @@ function Resolve-ArcGISBridgeCodexHome {
     return Join-Path $profileRoot '.codex'
 }
 
+function Get-ArcGISBridgeInstallLocatorPath {
+    param([string]$InstallLocatorPath = '')
+
+    if (-not [string]::IsNullOrWhiteSpace($InstallLocatorPath)) {
+        return [System.IO.Path]::GetFullPath($InstallLocatorPath)
+    }
+    return Join-Path $env:LOCALAPPDATA 'ArcGISCodexBridge\install-location.json'
+}
+
+function Resolve-ArcGISBridgeInstallRoot {
+    param(
+        [string]$InstallRoot = '',
+        [string]$InstallLocatorPath = ''
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
+        return [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ARCGIS_CODEX_BRIDGE_INSTALL_ROOT)) {
+        return [System.IO.Path]::GetFullPath($env:ARCGIS_CODEX_BRIDGE_INSTALL_ROOT).TrimEnd('\')
+    }
+    $locatorPath = Get-ArcGISBridgeInstallLocatorPath -InstallLocatorPath $InstallLocatorPath
+    if (Test-Path -LiteralPath $locatorPath -PathType Leaf) {
+        try {
+            $locator = Get-Content -LiteralPath $locatorPath -Raw | ConvertFrom-Json
+            if ($locator.install_root) {
+                return [System.IO.Path]::GetFullPath([string]$locator.install_root).TrimEnd('\')
+            }
+        }
+        catch {
+            Write-Verbose "Install locator could not be read: $_"
+        }
+    }
+    return (Join-Path $env:LOCALAPPDATA 'ArcGISCodexBridge').TrimEnd('\')
+}
+
+function Set-ArcGISBridgeInstallLocator {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [string]$InstallLocatorPath = ''
+    )
+
+    $locatorPath = Get-ArcGISBridgeInstallLocatorPath -InstallLocatorPath $InstallLocatorPath
+    $content = [ordered]@{ install_root = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') } |
+        ConvertTo-Json -Compress
+    Write-ArcGISBridgeAtomicText -Path $locatorPath -Content ($content + [Environment]::NewLine)
+    return $locatorPath
+}
+
+function Remove-ArcGISBridgeInstallLocator {
+    param(
+        [Parameter(Mandatory)][string]$InstallRoot,
+        [string]$InstallLocatorPath = ''
+    )
+
+    $locatorPath = Get-ArcGISBridgeInstallLocatorPath -InstallLocatorPath $InstallLocatorPath
+    if (-not (Test-Path -LiteralPath $locatorPath -PathType Leaf)) {
+        return $false
+    }
+    try {
+        $locator = Get-Content -LiteralPath $locatorPath -Raw | ConvertFrom-Json
+        $locatedRoot = [System.IO.Path]::GetFullPath([string]$locator.install_root).TrimEnd('\')
+        $targetRoot = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+        if (-not $locatedRoot.Equals($targetRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            return $false
+        }
+    }
+    catch {
+        return $false
+    }
+    Remove-Item -LiteralPath $locatorPath -Force
+    return $true
+}
+
 function ConvertTo-ArcGISBridgeTomlString {
     param([Parameter(Mandatory)][string]$Value)
 
@@ -246,6 +320,10 @@ function Assert-ArcGISBridgeSafeInstallRoot {
 
 Export-ModuleMember -Function @(
     'Resolve-ArcGISBridgeCodexHome',
+    'Get-ArcGISBridgeInstallLocatorPath',
+    'Resolve-ArcGISBridgeInstallRoot',
+    'Set-ArcGISBridgeInstallLocator',
+    'Remove-ArcGISBridgeInstallLocator',
     'Set-ArcGISBridgeGlobalMcpRegistration',
     'Remove-ArcGISBridgeGlobalMcpRegistration',
     'Test-ArcGISBridgeGlobalMcpRegistration',

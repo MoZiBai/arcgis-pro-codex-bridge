@@ -3,7 +3,7 @@
         defaultAssembly="ArcGISCodexBridgeAddin.dll"
         defaultNamespace="ArcGISCodexBridgeAddin">
   <AddInInfo id="{9B571A5F-D09C-4FD7-AE09-9AC8C5FA6612}"
-             version="0.28.0"
+             version="0.28.1"
              desktopVersion="3.6.0">
     <Name>ArcGIS Codex Bridge</Name>
     <Description>Automatically connects the current ArcGIS Pro project to the local Codex MCP server.</Description>

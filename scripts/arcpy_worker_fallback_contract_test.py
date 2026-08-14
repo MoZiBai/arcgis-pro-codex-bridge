@@ -44,7 +44,7 @@ def main() -> int:
         blocked = RuntimeError(
             "DLL load failed: 无法成功完成操作，因为文件包含病毒或潜在的垃圾软件。"
         )
-        with patch("src.arcgis_mcp.server.subprocess.run", side_effect=blocked):
+        with patch("src.arcgis_mcp.server.subprocess.Popen", side_effect=blocked):
             result = server._run_worker("status", {})
         if result["install"]["Version"] != "3.6.3":
             raise RuntimeError(f"Live ArcPy fallback returned the wrong result: {result}")
@@ -59,7 +59,7 @@ def main() -> int:
             AssertionError("non-security failures must not use the live fallback")
         )
         with patch(
-            "src.arcgis_mcp.server.subprocess.run",
+            "src.arcgis_mcp.server.subprocess.Popen",
             side_effect=RuntimeError("ordinary worker failure"),
         ):
             try:
@@ -72,7 +72,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as temporary:
         server = make_server(Path(temporary), fallback=False)
-        with patch("src.arcgis_mcp.server.subprocess.run", side_effect=blocked):
+        with patch("src.arcgis_mcp.server.subprocess.Popen", side_effect=blocked):
             try:
                 server._run_worker("status", {})
             except RuntimeError as error:
@@ -86,6 +86,7 @@ def main() -> int:
     module_source = (addin / "BridgeModule.cs").read_text(encoding="utf-8")
     if (
         '"config", "config.json"' not in support_source
+        or "ResolveInstallRoot()" not in support_source
         or 'TryGetProperty("live_bridge_queue"' not in support_source
         or "BridgeSupport.ResolveQueueRoot()" not in module_source
     ):

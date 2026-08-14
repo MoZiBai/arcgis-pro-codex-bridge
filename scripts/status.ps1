@@ -1,5 +1,6 @@
 param(
-    [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'ArcGISCodexBridge'),
+    [string]$InstallRoot = '',
+    [string]$InstallLocatorPath = '',
     [string]$CodexHome = '',
     [string]$Python = '',
     [switch]$WithArcPy
@@ -17,7 +18,9 @@ function Fail([string]$Message) {
     $script:failures.Add($Message)
 }
 
-$InstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
+$InstallRoot = Resolve-ArcGISBridgeInstallRoot `
+    -InstallRoot $InstallRoot `
+    -InstallLocatorPath $InstallLocatorPath
 $CodexHome = Resolve-ArcGISBridgeCodexHome -CodexHome $CodexHome
 $manifestPath = Join-Path $InstallRoot 'install.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) {
@@ -26,6 +29,13 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
 }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 Pass "Installation manifest: $($manifest.version), $($manifest.supported_product)"
+$locatedRoot = Resolve-ArcGISBridgeInstallRoot -InstallLocatorPath $InstallLocatorPath
+if ($locatedRoot.Equals($InstallRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    Pass "Add-in install locator resolves to: $InstallRoot"
+}
+else {
+    Fail "Add-in install locator resolves to '$locatedRoot', expected '$InstallRoot'"
+}
 
 $serverPath = [string]$manifest.server
 $configPath = [string]$manifest.config

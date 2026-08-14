@@ -95,12 +95,15 @@ $stagingContainer = Join-Path $OutputDirectory ('.release-staging-' + [guid]::Ne
 $stagingRoot = Join-Path $stagingContainer $releaseName
 New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
 try {
+    $releaseNotesRelative = "docs\release-v$Version.md"
+    $protocolRelative = "docs\live-bridge-protocol-v$Version.md"
     $releaseFiles = @(
         'README.md',
         'README.zh-CN.md',
         'config.example.json',
         'docs\installation.md',
-        'docs\release-v0.28.0.md',
+        $protocolRelative,
+        $releaseNotesRelative,
         'src\arcgis_mcp\__init__.py',
         'src\arcgis_mcp\server.py',
         'src\arcgis_mcp\worker.py',

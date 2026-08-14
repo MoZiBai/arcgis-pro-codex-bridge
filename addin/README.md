@@ -4,7 +4,7 @@ This is the auto-loaded ArcGIS Pro 3.6 bridge. The user opens ArcGIS Pro and a
 project; the add-in then processes the existing MCP file queue automatically.
 No Python Toolbox start step and no mouse/keyboard automation are required.
 
-Bridge protocol v0.28.0 supports:
+Bridge protocol v0.28.1 supports:
 
 - detecting the current ArcGIS Pro project and maps;
 - adding datasets to the current/selected map;
@@ -44,7 +44,7 @@ Bridge protocol v0.28.0 supports:
   Codex-child ArcPy process; it does not add antivirus exclusions.
 
 The exact command contract and safety behavior are documented in
-`docs/live-bridge-protocol-v0.28.0.md`. Source datasets remain read-only; layer
+`docs/live-bridge-protocol-v0.28.1.md`. Source datasets remain read-only; layer
 removal affects the map only. Saving a project copy is an explicit Save As
 operation and switches ArcGIS Pro to the new copy.
 

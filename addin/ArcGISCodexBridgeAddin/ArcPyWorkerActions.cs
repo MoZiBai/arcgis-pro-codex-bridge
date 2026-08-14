@@ -106,8 +106,7 @@ internal static class ArcPyWorkerActions
     {
         var workerPath = Path.GetFullPath(value);
         var allowedRoot = Path.GetFullPath(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ArcGISCodexBridge",
+            BridgeSupport.ResolveInstallRoot(),
             "runtime"));
         var relative = Path.GetRelativePath(allowedRoot, workerPath);
         if (Path.IsPathRooted(relative)

@@ -10,7 +10,40 @@ namespace ArcGISCodexBridgeAddin;
 
 internal static class BridgeSupport
 {
-    internal const string ProtocolVersion = "0.28.0";
+    internal const string ProtocolVersion = "0.28.1";
+
+    internal static string ResolveInstallRoot()
+    {
+        var environmentRoot = Environment.GetEnvironmentVariable(
+            "ARCGIS_CODEX_BRIDGE_INSTALL_ROOT");
+        if (!string.IsNullOrWhiteSpace(environmentRoot))
+        {
+            return System.IO.Path.GetFullPath(environmentRoot);
+        }
+
+        var defaultRoot = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ArcGISCodexBridge");
+        var locatorPath = System.IO.Path.Combine(defaultRoot, "install-location.json");
+        try
+        {
+            if (System.IO.File.Exists(locatorPath))
+            {
+                using var document = JsonDocument.Parse(System.IO.File.ReadAllText(locatorPath));
+                if (document.RootElement.TryGetProperty("install_root", out var root)
+                    && root.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(root.GetString()))
+                {
+                    return System.IO.Path.GetFullPath(root.GetString()!);
+                }
+            }
+        }
+        catch
+        {
+            // A malformed locator falls back to the standard per-user location.
+        }
+        return defaultRoot;
+    }
 
     internal static string ResolveQueueRoot()
     {
@@ -20,9 +53,7 @@ internal static class BridgeSupport
             return System.IO.Path.GetFullPath(environmentRoot);
         }
 
-        var installRoot = System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ArcGISCodexBridge");
+        var installRoot = ResolveInstallRoot();
         var defaultRoot = System.IO.Path.Combine(installRoot, "queue");
         var configPath = System.IO.Path.Combine(installRoot, "config", "config.json");
         try
