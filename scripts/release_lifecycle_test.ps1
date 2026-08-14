@@ -62,6 +62,7 @@ try {
 
     $expectedFiles = @(
         'README.md',
+        'README.zh-CN.md',
         'config.example.json',
         'docs/installation.md',
         'docs/release-v0.28.0.md',

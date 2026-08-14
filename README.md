@@ -1,74 +1,98 @@
+<div align="right">
+
+English | <a href="README.zh-CN.md">简体中文</a>
+
+</div>
+
 # ArcGIS Pro Bridge for Codex
 
-通过本地 MCP、ArcPy 和 ArcGIS Pro SDK Add-in 集成 Codex 与当前打开的
-ArcGIS Pro 项目，无需鼠标键盘自动化。
+Connect Codex to the currently open ArcGIS Pro project through a local MCP
+server, ArcPy, and an ArcGIS Pro SDK add-in—without mouse or keyboard automation.
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
 [![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.0-486581)](docs/live-bridge-protocol-v0.28.0.md)
-[![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
+[![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#security-boundaries)
 
-当前版本提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
-会话。服务器可作为标准 stdio MCP 注册到 Codex，也可供其他兼容 MCP 的客户端使用。
+The current release exposes 253 MCP tools. Of these, 236 use the add-in to work
+with the active ArcGIS Pro session. The server can be registered as a standard
+stdio MCP in Codex or used by another MCP-compatible client.
 
-## 主要能力
+## Key capabilities
 
-- 数据发现与描述：扫描文件夹，读取矢量、栅格和表格的字段、坐标系、范围与记录数。
-- 地理处理：调用受控的 ArcPy 工具，并检索本机 1,000 余个地理处理工具的参数与安全信息。
-- 项目与地图：盘点项目，创建、复制、重命名和打开地图，管理图层、独立表、书签和相机。
-- 数据查询：有限属性查询、统计、选择、空间查询、关系类和附件盘点。
-- 符号与标注：矢量和栅格渲染、视觉变量、显示过滤、Standard/Maplex 标注与图层高程。
-- 地形与三维：高程设色、独立山体阴影、LAS/体素、场景高程面和探索分析。
-- 学术制图：布局、地图框、原生图例、比例尺、指北针、经纬网、颜色条、范围指示器和地图系列。
-- 导出：PDF、PNG、JPEG、TIFF、SVG、SVGZ、EPS、AIX、报表、演示和地图系列。
-- 高级对象：Catalog 项、报表、演示、Task Assistant、Workflow Manager、Knowledge Graph 和 CIM 对象。
-- 扩展发现：只读检索 ArcGIS Pro SDK、DAML/Framework 和地理处理注册表。
+- Data discovery and description: scan folders and inspect vector, raster, and
+  table fields, coordinate systems, extents, and record counts.
+- Geoprocessing: run guarded ArcPy tools and search more than 1,000 locally
+  installed geoprocessing tools with parameter and safety metadata.
+- Projects and maps: inventory projects; create, duplicate, rename, and open
+  maps; manage layers, standalone tables, bookmarks, and cameras.
+- Data queries: bounded attribute queries, summaries, selections, spatial
+  queries, relationships, and attachment inventories.
+- Symbology and labeling: vector and raster renderers, visual variables,
+  display filters, Standard/Maplex labels, and layer elevation.
+- Terrain and 3D: elevation tinting, independent hillshade, LAS and voxel
+  layers, scene elevation surfaces, and exploratory analysis.
+- Academic cartography: layouts, map frames, native legends, scale bars, north
+  arrows, grids, color bars, extent indicators, and map series.
+- Export: PDF, PNG, JPEG, TIFF, SVG, SVGZ, EPS, AIX, reports,
+  presentations, and map series.
+- Advanced project objects: Catalog items, reports, presentations, Task
+  Assistant, Workflow Manager, Knowledge Graph, and CIM objects.
+- Extension discovery: read-only search over the ArcGIS Pro SDK, DAML/Framework,
+  and geoprocessing registries.
 
-完整能力列表见 [capability-matrix.md](docs/capability-matrix.md)。
+See [capability-matrix.md](docs/capability-matrix.md) for the complete inventory.
 
-## 架构
+## Architecture
 
 ```text
-Codex 或其他 MCP 客户端
+Codex or another MCP client
   │ stdio MCP
   ▼
 Python MCP server ── ArcPy worker
   │ bounded local queue
   ▼
-ArcGIS Pro SDK Add-in ── 当前打开的 ArcGIS Pro 项目
+ArcGIS Pro SDK add-in ── currently open ArcGIS Pro project
 ```
 
-- MCP server 负责工具定义、路径验证、配置和安全策略。
-- ArcPy worker 负责数据扫描、数据描述及后台地理处理。
-- SDK Add-in 在 ArcGIS Pro 进程内操作当前项目和界面对象。
-- Add-in 自动加载并处理本地队列，不需要 Python Toolbox 或额外启动步骤。
+- The MCP server owns tool definitions, path validation, configuration, and
+  safety policy.
+- The ArcPy worker handles data discovery, dataset description, and background
+  geoprocessing.
+- The SDK add-in works with the active project and UI objects inside the
+  ArcGIS Pro process.
+- The add-in loads automatically and consumes the local queue. No Python
+  Toolbox or separate startup step is required.
 
-当 Codex Windows 沙箱因 Windows Security 错误 225 无法加载 ArcPy 原生模块时，
-服务器可以把同一条已验证的 worker 请求交给当前 ArcGIS Pro 进程启动的受限子进程。
-该回退不接受任意可执行文件或任意 worker 路径，也不会添加 Defender 排除项。
+If the Codex Windows sandbox cannot load ArcPy native modules because Windows
+Security returns error 225, the server can forward the same validated worker
+request to a restricted child process launched by the active ArcGIS Pro process.
+The fallback cannot select an arbitrary executable or worker path and does not
+add a Microsoft Defender exclusion.
 
-## 系统要求
+## Requirements
 
-- Windows 10 或 Windows 11 x64
+- Windows 10 or Windows 11 x64
 - ArcGIS Pro 3.6
-- Python 3.10 或更高版本（用于 MCP server）
-- Codex 或其他支持 stdio MCP 的客户端
+- Python 3.10 or newer for the MCP server
+- Codex or another client with stdio MCP support
 
-GitHub Release 安装不需要 Visual Studio、MSBuild 或 .NET SDK。只有从源码重新构建
-ArcGIS Pro Add-in 时才需要 .NET 8 SDK 和 Visual Studio 2022 Build Tools。
+Installing the GitHub Release does not require Visual Studio, MSBuild, or the
+.NET SDK. Rebuilding the ArcGIS Pro add-in from source requires the .NET 8 SDK
+and Visual Studio 2022 Build Tools.
 
-ArcMap / ArcGIS Desktop 10.2–10.8 使用不同的 Python、ArcObjects 和 Add-in 架构，
-当前版本不支持。
+ArcMap / ArcGIS Desktop 10.2–10.8 use different Python, ArcObjects, and add-in
+architectures and are not supported by this release.
 
-## 安装
+## Installation
 
-推荐从 GitHub Releases 下载：
+Download these files from GitHub Releases:
 
 ```text
 arcgis-pro-codex-bridge-0.28.0-win-x64.zip
 arcgis-pro-codex-bridge-0.28.0-win-x64.zip.sha256
 ```
 
-验证 SHA-256 后解压，在 PowerShell 中运行：
+Verify the SHA-256 checksum, extract the ZIP, and run in PowerShell:
 
 ```powershell
 .\scripts\install.ps1 `
@@ -76,84 +100,93 @@ arcgis-pro-codex-bridge-0.28.0-win-x64.zip.sha256
   -OutputRoot 'C:\GISOutput'
 ```
 
-安装器会：
+The installer:
 
-1. 检查 ArcGIS Pro 3.6 与系统 Python。
-2. 将 MCP 运行时安装到 `%LOCALAPPDATA%\ArcGISCodexBridge`。
-3. 生成机器私有的安全配置。
-4. 校验并安装预编译 `.esriAddinX`。
-5. 在用户级 `~/.codex/config.toml` 注册 `arcgis-pro` MCP。
+1. Verifies ArcGIS Pro 3.6 and the system Python runtime.
+2. Installs the stable MCP runtime under `%LOCALAPPDATA%\ArcGISCodexBridge`.
+3. Creates a machine-private safety configuration.
+4. Validates and installs the prebuilt `.esriAddinX` package.
+5. Registers the `arcgis-pro` MCP in the user-level `~/.codex/config.toml`.
 
-如果 ArcGIS Pro 安装在非默认目录，可传入 `-ArcGISProInstallDir`。安装完成后重启
-Codex；Add-in 发生变化时还需要重启 ArcGIS Pro。
+Use `-ArcGISProInstallDir` when ArcGIS Pro is installed in a non-default
+location. Restart Codex after installation. Restart ArcGIS Pro whenever the
+add-in changes.
 
-详细参数和生命周期说明见 [installation.md](docs/installation.md)。
+See [installation.md](docs/installation.md) for all options and lifecycle details.
 
-## 状态与诊断
+## Status and diagnostics
 
-常规检查不会导入 ArcPy：
+Run the normal check without importing ArcPy:
 
 ```powershell
 .\scripts\status.ps1
 ```
 
-完整运行时诊断会同时测试 ArcPy：
+Run the full diagnostic, including the ArcPy worker:
 
 ```powershell
 .\scripts\doctor.ps1
 ```
 
-诊断内容包括安装清单、版本、全局 MCP 注册、Add-in、服务器初始化、工具发现和
-ArcPy 运行时。Windows Security 报告 ArcGIS DLL 时，应优先检查 Protection History
-并通过 Esri 官方安装程序修复，不应对整个 ArcGIS 目录添加宽泛排除。
+The checks cover the installation manifest, versions, global MCP registration,
+add-in package, server initialization, tool discovery, and the ArcPy runtime.
+If Windows Security reports an ArcGIS DLL, inspect Protection History and repair
+ArcGIS Pro from the official Esri installer. Do not broadly exclude the ArcGIS
+installation directory.
 
-## 配置
+## Configuration
 
-安装后的私有配置位于：
+The installed private configuration is stored at:
 
 ```text
 %LOCALAPPDATA%\ArcGISCodexBridge\config\config.json
 ```
 
-主要配置项：
+Key settings:
 
-| 配置项 | 作用 | 默认值 |
+| Setting | Purpose | Default |
 | --- | --- | --- |
-| `allowed_data_roots` | 允许读取的数据根目录 | 安装目录内的 `data` |
-| `output_root` | 所有派生输出的根目录 | 安装目录内的 `outputs` |
-| `live_bridge_queue` | MCP 与 Add-in 的本地队列 | 安装目录内的 `queue` |
-| `allow_source_editing` | 允许修改源数据 | `false` |
-| `allow_destructive_tools` | 允许删除或清空操作 | `false` |
-| `allow_schema_changes` | 允许字段和结构修改 | `false` |
-| `allow_external_publishing` | 允许外部发布 | `false` |
-| `allow_framework_ui_control` | 允许通用 Framework UI 控制 | `false` |
+| `allowed_data_roots` | Data roots that may be read | installation `data` directory |
+| `output_root` | Root for every derived output | installation `outputs` directory |
+| `live_bridge_queue` | Local MCP-to-add-in queue | installation `queue` directory |
+| `allow_source_editing` | Permit source-data edits | `false` |
+| `allow_destructive_tools` | Permit delete or truncate operations | `false` |
+| `allow_schema_changes` | Permit field and schema changes | `false` |
+| `allow_external_publishing` | Permit external publishing | `false` |
+| `allow_framework_ui_control` | Permit generic Framework UI control | `false` |
 
-开发配置模板见 [config.example.json](config.example.json)。安全策略可显式热重载，
-但数据路径和运行时位置需要重启 MCP 才会生效。
+See [config.example.json](config.example.json) for the development template.
+Safety policy can be explicitly hot-reloaded. Data paths and runtime locations
+require an MCP restart.
 
-## 安全边界
+## Security boundaries
 
-- 只允许访问 `allowed_data_roots`，派生文件必须写入 `output_root`。
-- 删除、清空、源数据编辑、结构修改、发布和外部工作流动作默认关闭。
-- 通用 ArcPy 执行器与专用工具使用相同安全门，不能绕过策略。
-- Framework 控制需要总开关和精确 ID 允许列表同时授权。
-- 工程文件修改优先写入新的 `.aprx` 副本。
-- ArcPy 安全回退仅响应明确的 Windows Security 加载错误；普通异常不会触发回退。
-- 回退 worker 固定为稳定安装目录中的 `runtime\worker.py`，Python 固定来自当前
-  ArcGIS Pro 安装目录。
-- 不创建 Defender 排除项、服务、计划任务、防火墙规则或提权 helper。
-- `config.json`、GIS 数据、输出、队列、日志和构建产物均被版本控制排除。
+- Reads are limited to `allowed_data_roots`; derived files must be written
+  under `output_root`.
+- Delete, truncate, source editing, schema changes, publishing, and external
+  workflow actions are disabled by default.
+- Generic ArcPy execution and specialized tools share the same safety gates.
+- Framework control requires both the master switch and an exact ID allowlist.
+- Project changes prefer a new `.aprx` copy instead of overwriting the source.
+- The ArcPy fallback runs only after an explicit Windows Security load error;
+  ordinary worker failures do not trigger it.
+- The fallback worker is fixed to `runtime\worker.py` under the stable install,
+  and Python is derived from the current ArcGIS Pro installation.
+- The installer creates no Defender exclusions, services, scheduled tasks,
+  firewall rules, or elevated helpers.
+- `config.json`, GIS data, outputs, queues, logs, and build artifacts are
+  excluded from version control.
 
-## 从源码构建
+## Building from source
 
-从源码安装且没有 `prebuilt` 包时，安装器会构建 Add-in：
+When no `prebuilt` package is present, the source installer builds the add-in:
 
 ```powershell
 .\scripts\install.ps1 `
   -ArcGISProInstallDir 'C:\Program Files\ArcGIS\Pro'
 ```
 
-也可以分别执行开发脚本：
+Development steps can also be run separately:
 
 ```powershell
 .\scripts\build-addin.ps1
@@ -161,18 +194,19 @@ ArcPy 运行时。Windows Security 报告 ArcGIS DLL 时，应优先检查 Prote
 .\scripts\register-mcp.ps1
 ```
 
-构建 GitHub Release 安装包：
+Build a GitHub Release package with:
 
 ```powershell
 .\scripts\build-release.ps1 `
   -ArcGISProInstallDir 'C:\Program Files\ArcGIS\Pro'
 ```
 
-输出位于 `dist`，包含版本化目录、ZIP、逐文件 SHA-256 清单和 ZIP 校验文件。
+The `dist` directory receives a versioned folder, ZIP archive, per-file SHA-256
+manifest, and ZIP checksum file.
 
-## 测试
+## Testing
 
-核心协议和安全测试：
+Core protocol and safety checks:
 
 ```powershell
 python .\scripts\protocol_contract_test.py
@@ -185,26 +219,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_lifec
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_lifecycle_test.ps1
 ```
 
-Release 生命周期测试在临时目录中完成解压、逐文件哈希验证、隐私扫描、无 MSBuild
-安装、253 工具发现和卸载，不写入真实 GIS 数据或实际 Add-in 目录。
+The Release lifecycle test extracts the package in a temporary directory,
+verifies every hash, scans for private information, installs without MSBuild,
+discovers all 253 tools, and uninstalls without touching real GIS data or the
+actual add-in directory.
 
-## 卸载
+## Uninstalling
 
 ```powershell
 .\scripts\uninstall.ps1
 ```
 
-默认保留 ArcGIS Pro Add-in。需要一并移除时：
+The add-in is retained by default. Remove it explicitly with:
 
 ```powershell
 .\scripts\uninstall.ps1 -RemoveAddin
 ```
 
-## 文档
+## Documentation
 
-- [安装与生命周期](docs/installation.md)
-- [v0.28.0 协议](docs/live-bridge-protocol-v0.28.0.md)
-- [实时桥接设计](docs/live-bridge-design.md)
-- [能力矩阵](docs/capability-matrix.md)
-- [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)
-- [v0.28.0 Release 说明](docs/release-v0.28.0.md)
+- [Installation and lifecycle](docs/installation.md)
+- [Protocol v0.28.0](docs/live-bridge-protocol-v0.28.0.md)
+- [Live bridge design](docs/live-bridge-design.md)
+- [Capability matrix](docs/capability-matrix.md)
+- [SDK coverage audit](docs/sdk-coverage-audit-v0.27.md)
+- [Release notes v0.28.0](docs/release-v0.28.0.md)

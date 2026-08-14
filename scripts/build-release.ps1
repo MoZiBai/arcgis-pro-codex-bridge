@@ -97,6 +97,7 @@ New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
 try {
     $releaseFiles = @(
         'README.md',
+        'README.zh-CN.md',
         'config.example.json',
         'docs\installation.md',
         'docs\release-v0.28.0.md',
