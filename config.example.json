@@ -1,5 +1,6 @@
 {
   "arcgis_python": "C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\python.exe",
+  "arcgis_pro_install_dir": "C:\\Program Files\\ArcGIS\\Pro",
   "allowed_data_roots": [
     "C:\\GISData"
   ],

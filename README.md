@@ -86,32 +86,41 @@ ArcGIS Pro SDK Add-in ── 当前打开的 ArcGIS Pro 项目
 - .NET 8 SDK 与 Visual Studio 2022 Build Tools（仅构建 Add-in 时需要）；
 - Codex CLI 或支持 stdio MCP 的客户端。
 
+当前安装器只支持 **ArcGIS Pro 3.6**。ArcMap / ArcGIS Desktop 10.2–10.8
+使用不同的 Python、ArcObjects 和 Add-in 架构，暂不兼容，后续通过独立适配层支持。
+
 ## 快速开始
 
-1. 克隆仓库并创建本地配置：
+1. 克隆仓库，从安全的最小数据范围执行安装：
 
    ```powershell
-   Copy-Item .\config.example.json .\config.json
+   .\scripts\install.ps1 `
+     -AllowedDataRoot 'C:\GISData' `
+     -OutputRoot 'C:\GISOutput'
    ```
 
-2. 编辑 `config.json`，设置 ArcGIS Python、允许读取的数据目录、输出目录和桥接队列。不要提交该文件。
+2. 如果 ArcGIS Pro 不在默认目录，设置 `ARCGIS_PRO_INSTALL_DIR`，或传入
+   `-ArcGISProInstallDir`。安装器会把 MCP 运行时复制到稳定的用户目录，创建私有配置，
+   构建并安装 Add-in，并写入用户级全局 Codex MCP 配置。
 
-3. 构建并安装 Add-in：
+3. 重启 Codex；Add-in 发生变化时也重启 ArcGIS Pro。随后运行：
+
+   ```powershell
+   .\scripts\status.ps1
+   .\scripts\doctor.ps1
+   ```
+
+4. 打开 ArcGIS Pro 项目；新建 Codex 任务并调用 `arcgis_status` /
+   `live_bridge_status` 检查连接。完整安装、诊断和卸载说明见
+   [`docs/installation.md`](docs/installation.md)。
+
+仅进行源码开发时，仍可手动构建和全局注册：
 
    ```powershell
    .\scripts\build-addin.ps1
    .\scripts\install-addin.ps1
-   ```
-
-   如果 ArcGIS Pro 不在默认目录，可设置 `ARCGIS_PRO_INSTALL_DIR`，或向脚本传入 `-ArcGISProInstallDir`。
-
-4. 注册 MCP：
-
-   ```powershell
    .\scripts\register-mcp.ps1
    ```
-
-5. 重启 ArcGIS Pro，打开项目；随后新建 Codex 任务并调用 `arcgis_status` / `live_bridge_status` 检查连接。
 
 > 仓库不包含 GIS 数据、生成地图、真实配置、运行队列或编译产物。它们均由 `.gitignore` 排除。
 
@@ -134,6 +143,9 @@ python .\scripts\document_element_factory_contract_test.py
 python .\scripts\specialized_rendering_contract_test.py
 python .\scripts\advanced_document_contract_test.py
 python .\scripts\attribute_rule_evaluation_contract_test.py
+python .\scripts\server_instructions_contract_test.py
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_contract_test.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\installation_lifecycle_test.ps1
 ```
 
 同时测试 ArcPy：
@@ -178,6 +190,11 @@ args = [
 也可以在受信任的本地项目中创建 `.codex/config.toml`；该机器相关文件不随仓库发布。
 
 ## 使用方式
+
+MCP 初始化时会返回服务器级调用边界：只有请求明确涉及 ArcGIS Pro、ArcPy、
+GIS 数据、空间分析、地图、图层、布局、制图或地理处理时才应调用本服务器；
+普通编程、文件处理、网页、办公文档和一般问答不得调用。最终选择由 Codex 结合
+这些 `instructions` 与每个工具描述完成，安全开关继续约束实际可执行操作。
 
 以后可以直接对 Codex 说：
 

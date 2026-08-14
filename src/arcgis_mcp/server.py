@@ -19,6 +19,19 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKER = Path(__file__).with_name("worker.py")
 LOG = logging.getLogger("arcgis_mcp")
 
+SERVER_INSTRUCTIONS = (
+    "Use this ArcGIS Pro server only when the user's request clearly involves "
+    "ArcGIS Pro, ArcPy, GIS datasets, spatial analysis, maps, layers, layouts, "
+    "cartography, geoprocessing, or the currently open ArcGIS Pro project. Do "
+    "not call any tool for unrelated coding, ordinary files, web research, "
+    "office documents, or general questions. Before the first GIS operation "
+    "call arcgis_status; inspect requested data with scan_data_folder and "
+    "describe_dataset. Preserve source data and write derived outputs only "
+    "under the configured output root. Use live_* tools only when the request "
+    "requires the open ArcGIS Pro project. This build targets ArcGIS Pro 3.6 "
+    "only; ArcMap and ArcGIS Desktop 10.2-10.8 are unsupported."
+)
+
 ALLOWED_TOOLBOXES = {
     "analysis",
     "management",
@@ -6837,6 +6850,7 @@ def serve(server: ArcGISMCP) -> None:
                     "protocolVersion": params.get("protocolVersion", "2024-11-05"),
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "arcgis-pro-mcp", "version": VERSION},
+                    "instructions": SERVER_INSTRUCTIONS,
                 }
             elif method == "ping":
                 result = {}
