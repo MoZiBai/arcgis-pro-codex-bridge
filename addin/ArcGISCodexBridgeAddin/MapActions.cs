@@ -314,11 +314,7 @@ internal static class MapActions
     {
         try
         {
-            var queueRoot = Environment.GetEnvironmentVariable("ARCGIS_CODEX_BRIDGE_QUEUE")
-                ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "ArcGISCodexBridge",
-                    "queue");
+            var queueRoot = BridgeSupport.ResolveQueueRoot();
             Directory.CreateDirectory(queueRoot);
             File.AppendAllText(
                 Path.Combine(queueRoot, "camera_trace.log"),

@@ -7,6 +7,7 @@
   "output_root": "C:\\GISOutput",
   "live_bridge_queue": "C:\\Users\\YOUR_NAME\\AppData\\Local\\ArcGISCodexBridge\\queue",
   "live_bridge_timeout_seconds": 180,
+  "live_arcpy_worker_fallback": true,
   "timeout_seconds": 1800,
   "allow_destructive_tools": false,
   "allow_source_editing": false,

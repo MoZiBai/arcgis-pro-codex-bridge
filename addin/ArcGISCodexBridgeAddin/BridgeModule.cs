@@ -18,12 +18,7 @@ namespace ArcGISCodexBridgeAddin;
 
 internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
 {
-    private static readonly string QueueRoot =
-        Environment.GetEnvironmentVariable("ARCGIS_CODEX_BRIDGE_QUEUE")
-        ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ArcGISCodexBridge",
-            "queue");
+    private static readonly string QueueRoot = BridgeSupport.ResolveQueueRoot();
 
     private CancellationTokenSource? _cancellation;
     private Task? _worker;
@@ -246,6 +241,7 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
             "configure_map_properties" => ProjectTemplateActions.ConfigureMapPropertiesAsync(payload, cancellationToken),
             "save_map_file" => ProjectTemplateActions.SaveMapFileAsync(payload, cancellationToken),
             "run_geoprocessing" => GeoprocessingActions.RunAsync(payload, cancellationToken),
+            "run_arcpy_worker" => ArcPyWorkerActions.RunAsync(payload, cancellationToken),
             "describe_layer" => LayerActions.DescribeAsync(payload, cancellationToken),
             "get_layer_cim" => LayerActions.GetCimAsync(payload, cancellationToken),
             "set_layer_cim" => LayerActions.SetCimAsync(payload, cancellationToken),

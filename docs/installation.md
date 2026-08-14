@@ -17,7 +17,8 @@ It contains a stable MCP runtime, a machine-private `config.json`, a probe
 utility, a versioned installation manifest, bounded data/output directories,
 and the live-bridge queue. The installer also:
 
-- builds and installs the ArcGIS Pro SDK Add-in;
+- installs the prebuilt ArcGIS Pro SDK Add-in included in a GitHub Release;
+- builds the Add-in only when installing from source without a prebuilt package;
 - writes one `mcp_servers.arcgis-pro` table to the user's global
   `~/.codex/config.toml`;
 - preserves unrelated Codex settings and MCP servers;
@@ -28,10 +29,14 @@ and the live-bridge queue. The installer also:
 
 The installed MCP points to the stable runtime rather than the Git clone, so
 moving or deleting the source checkout does not break the registration.
+The Add-in reads `live_bridge_queue` from the stable private config (with
+`ARCGIS_CODEX_BRIDGE_QUEUE` as an explicit override), so upgrades retain an
+existing queue without a machine-wide environment change.
 
 ## Install
 
-From a cloned repository:
+Recommended: download and extract the versioned `win-x64.zip` from GitHub
+Releases, then run from the extracted directory:
 
 ```powershell
 .\scripts\install.ps1 `
@@ -39,11 +44,15 @@ From a cloned repository:
   -OutputRoot 'C:\GISOutput'
 ```
 
+The Release package does not require Visual Studio, MSBuild, or the .NET SDK.
+Its bundled `.esriAddinX` is version-checked and SHA-256 verified after copying.
+
 If ArcGIS Pro is not installed under `C:\Program Files\ArcGIS\Pro`, pass
 `-ArcGISProInstallDir` or set `ARCGIS_PRO_INSTALL_DIR`. The installer also
 checks the ArcGIS Pro registry keys and an existing local development config.
-Pass `-MSBuild` when Visual Studio Build Tools cannot be discovered by
-`vswhere`. Existing development settings can be migrated explicitly with
+When installing from a source checkout that has no `prebuilt` package, pass
+`-MSBuild` if Visual Studio Build Tools cannot be discovered by `vswhere`.
+An explicit package may be selected with `-AddinPackage`. Existing development settings can be migrated explicitly with
 `-ImportConfig .\config.json`; because this imports the complete local policy,
 review all safety switches first.
 
@@ -73,10 +82,13 @@ The deeper diagnostic also starts the ArcPy worker:
 .\scripts\doctor.ps1
 ```
 
-If Windows Security blocks `_arcgisscripting.pyd`, first inspect Protection
-History and repair ArcGIS Pro from its official installer. Do not broadly
-exclude the ArcGIS installation directory; allow an exact file only after its
-Esri signature has been verified.
+If Windows Security blocks ArcPy in the Codex sandbox, the MCP can retry only
+that audited worker request through the currently open ArcGIS Pro Add-in. The
+Add-in derives ArcGIS Python from the running Pro installation and accepts only
+the installed `runtime\worker.py`; it does not add exclusions or execute an
+arbitrary program. First inspect Protection History and repair ArcGIS Pro from
+its official installer. Do not broadly exclude the ArcGIS installation
+directory.
 
 ## Uninstall
 

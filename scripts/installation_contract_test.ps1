@@ -65,7 +65,13 @@ args = ["serve"]
         throw 'Global registration removal damaged unrelated configuration.'
     }
 
-    Write-Output 'installation contract ok: global apply/remove is idempotent and preserves unrelated Codex config'
+    $addinInstaller = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'install-addin.ps1') -Raw
+    if ($addinInstaller -notmatch '\$null\s+-ne\s+\$registrationExitCode' -or
+        $addinInstaller -notmatch 'hash-verified package will load after ArcGIS Pro restarts') {
+        throw 'Add-in installer must tolerate RegisterAddIn returning no exit code while Pro is open.'
+    }
+
+    Write-Output 'installation contract ok: global apply/remove is idempotent, unrelated config is preserved, and open-Pro registration is restart-safe'
 }
 finally {
     if (Test-Path -LiteralPath $root) {

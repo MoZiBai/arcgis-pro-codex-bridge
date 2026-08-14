@@ -287,7 +287,10 @@ def main() -> int:
     missing_actions = sorted(set(TOOL_TO_ACTION.values()) - capabilities)
     missing_dispatch = sorted(capabilities - dispatch_actions)
     extra_dispatch = sorted(dispatch_actions - capabilities)
-    extra_actions = sorted(capabilities - set(TOOL_TO_ACTION.values()))
+    internal_actions = {"run_arcpy_worker"}
+    extra_actions = sorted(
+        capabilities - set(TOOL_TO_ACTION.values()) - internal_actions
+    )
     duplicate_tools = sorted({name for name in tool_name_list if tool_name_list.count(name) > 1})
     high_level_live_tools = {
         "live_create_terrain_stack",
@@ -319,7 +322,7 @@ def main() -> int:
 
     print(
         f"protocol contract ok: {len(TOOL_TO_ACTION)} live tools, "
-        f"{len(capabilities)} add-in actions"
+        f"{len(capabilities)} add-in actions ({len(internal_actions)} internal)"
     )
     return 0
 

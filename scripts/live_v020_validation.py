@@ -26,7 +26,7 @@ def main() -> int:
     server = ArcGISMCP(ROOT / "config.json")
     server.live_timeout = min(server.live_timeout, 120)
     status = server._run_live("status", {})
-    if status.get("protocol_version") not in {"0.20.0", "0.21.0", "0.22.0", "0.23.0", "0.23.1", "0.23.2", "0.24.0", "0.25.0", "0.26.0", "0.27.0", "0.27.1", "0.27.2", "0.27.3"}:
+    if status.get("protocol_version") not in {"0.20.0", "0.21.0", "0.22.0", "0.23.0", "0.23.1", "0.23.2", "0.24.0", "0.25.0", "0.26.0", "0.27.0", "0.27.1", "0.27.2", "0.27.3", "0.28.0"}:
         raise RuntimeError(f"Expected protocol 0.20.0 or a compatible later version, got {status.get('protocol_version')}")
     actions = set(status.get("capabilities") or [])
     required = {

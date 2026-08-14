@@ -5,11 +5,14 @@ param(
     [string]$Python = '',
     [string]$ArcGISProInstallDir = '',
     [string]$MSBuild = '',
+    [string]$AddinPackage = '',
+    [string]$AddinInstallDirectory = '',
     [string]$ImportConfig = '',
     [string[]]$AllowedDataRoot = @(),
     [string]$OutputRoot = '',
     [string]$QueueRoot = '',
     [switch]$SkipAddin,
+    [switch]$SkipAddinRegistration,
     [switch]$SkipGlobalRegistration
 )
 
@@ -98,6 +101,7 @@ elseif (-not $settings.Contains('live_bridge_queue')) {
 
 $defaults = [ordered]@{
     live_bridge_timeout_seconds = 180
+    live_arcpy_worker_fallback = $true
     timeout_seconds = 1800
     allow_destructive_tools = $false
     allow_source_editing = $false
@@ -121,11 +125,33 @@ if (-not $PSCmdlet.ShouldProcess($InstallRoot, "Install ArcGIS Pro MCP bridge $v
     return
 }
 
+$selectedAddinPackage = ''
+$addinInstallMode = 'skipped'
 if (-not $SkipAddin) {
-    & (Join-Path $PSScriptRoot 'build-addin.ps1') `
-        -ArcGISProInstallDir $ArcGISProInstallDir `
-        -MSBuild $MSBuild
-    if ($LASTEXITCODE -ne 0) { throw "Add-in build failed with exit code $LASTEXITCODE" }
+    $prebuiltPackage = Join-Path $sourceRoot 'prebuilt\ArcGISCodexBridgeAddin.esriAddinX'
+    if (-not [string]::IsNullOrWhiteSpace($AddinPackage)) {
+        $selectedAddinPackage = [System.IO.Path]::GetFullPath($AddinPackage)
+        $addinInstallMode = 'explicit-package'
+    }
+    elseif (Test-Path -LiteralPath $prebuiltPackage -PathType Leaf) {
+        $selectedAddinPackage = $prebuiltPackage
+        $addinInstallMode = 'prebuilt-release'
+    }
+    else {
+        & (Join-Path $PSScriptRoot 'build-addin.ps1') `
+            -ArcGISProInstallDir $ArcGISProInstallDir `
+            -MSBuild $MSBuild
+        if ($LASTEXITCODE -ne 0) { throw "Add-in build failed with exit code $LASTEXITCODE" }
+        $selectedAddinPackage = Join-Path $sourceRoot `
+            'addin\ArcGISCodexBridgeAddin\bin\x64\Release\ArcGISCodexBridgeAddin.esriAddinX'
+        $addinInstallMode = 'source-build'
+    }
+    if (-not (Test-Path -LiteralPath $selectedAddinPackage -PathType Leaf)) {
+        throw "Add-in package was not found: $selectedAddinPackage"
+    }
+    if ([System.IO.Path]::GetExtension($selectedAddinPackage) -ine '.esriAddinX') {
+        throw "Expected an .esriAddinX package: $selectedAddinPackage"
+    }
 }
 
 New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
@@ -184,6 +210,8 @@ try {
         config = $configPath
         addin_id = $addinIdMatch.Groups[1].Value
         addin_installed = (-not $SkipAddin)
+        addin_install_mode = $addinInstallMode
+        addin_registration_skipped = [bool]$SkipAddinRegistration
         source = $sourceRoot
     }
     [System.IO.File]::WriteAllText(
@@ -202,7 +230,12 @@ try {
     }
 
     if (-not $SkipAddin) {
-        & (Join-Path $PSScriptRoot 'install-addin.ps1') -ArcGISProInstallDir $ArcGISProInstallDir
+        & (Join-Path $PSScriptRoot 'install-addin.ps1') `
+            -ArcGISProInstallDir $ArcGISProInstallDir `
+            -Package $selectedAddinPackage `
+            -ExpectedVersion $version `
+            -InstallDirectory $AddinInstallDirectory `
+            -SkipRegistration:$SkipAddinRegistration
         if ($LASTEXITCODE -ne 0) { throw "Add-in installation failed with exit code $LASTEXITCODE" }
     }
 }
@@ -220,6 +253,6 @@ if ($SkipAddin) {
     Write-Output '[INFO] Add-in build and installation were skipped.'
 }
 else {
-    Write-Output '[PASS] Built and installed the ArcGIS Pro Add-in.'
+    Write-Output "[PASS] Installed the ArcGIS Pro Add-in ($addinInstallMode)."
 }
 Write-Output 'Restart Codex after installation. Restart ArcGIS Pro when the Add-in changed.'

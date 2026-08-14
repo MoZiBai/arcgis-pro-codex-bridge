@@ -10,7 +10,41 @@ namespace ArcGISCodexBridgeAddin;
 
 internal static class BridgeSupport
 {
-    internal const string ProtocolVersion = "0.27.3";
+    internal const string ProtocolVersion = "0.28.0";
+
+    internal static string ResolveQueueRoot()
+    {
+        var environmentRoot = Environment.GetEnvironmentVariable("ARCGIS_CODEX_BRIDGE_QUEUE");
+        if (!string.IsNullOrWhiteSpace(environmentRoot))
+        {
+            return System.IO.Path.GetFullPath(environmentRoot);
+        }
+
+        var installRoot = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ArcGISCodexBridge");
+        var defaultRoot = System.IO.Path.Combine(installRoot, "queue");
+        var configPath = System.IO.Path.Combine(installRoot, "config", "config.json");
+        try
+        {
+            if (!System.IO.File.Exists(configPath))
+            {
+                return defaultRoot;
+            }
+            using var document = JsonDocument.Parse(System.IO.File.ReadAllText(configPath));
+            if (document.RootElement.TryGetProperty("live_bridge_queue", out var queue)
+                && queue.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(queue.GetString()))
+            {
+                return System.IO.Path.GetFullPath(queue.GetString()!);
+            }
+        }
+        catch
+        {
+            // A malformed or unavailable private config falls back to the stable queue.
+        }
+        return defaultRoot;
+    }
 
     internal static readonly string[] Capabilities =
     {
@@ -56,6 +90,7 @@ internal static class BridgeSupport
         "configure_map_properties",
         "save_map_file",
         "run_geoprocessing",
+        "run_arcpy_worker",
         "describe_layer",
         "get_layer_cim",
         "set_layer_cim",

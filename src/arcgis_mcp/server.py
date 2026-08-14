@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.27.3"
+VERSION = "0.28.0"
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = Path(__file__).with_name("worker.py")
 LOG = logging.getLogger("arcgis_mcp")
@@ -4665,6 +4665,9 @@ class ArcGISMCP:
         }
         self.live_queue = Path(self.config.get("live_bridge_queue", ROOT / "bridge_queue")).resolve()
         self.live_timeout = int(self.config.get("live_bridge_timeout_seconds", 180))
+        self.live_arcpy_worker_fallback = bool(
+            self.config.get("live_arcpy_worker_fallback", True)
+        )
         self._framework_registry_cache: list[dict[str, Any]] | None = None
         for name in ("jobs", "results", "processing"):
             (self.live_queue / name).mkdir(parents=True, exist_ok=True)
@@ -5086,29 +5089,11 @@ class ArcGISMCP:
             return ["cmd.exe", "/d", "/c", "call", str(self.arcgis_python), str(WORKER)]
         return [str(self.arcgis_python), str(WORKER)]
 
-    def _run_worker(self, action: str, payload: dict[str, Any]) -> Any:
-        if not self.arcgis_python.exists():
-            raise FileNotFoundError(f"ArcGIS Python launcher not found: {self.arcgis_python}")
-        request = {"action": action, "payload": payload}
-        completed = subprocess.run(
-            self._worker_command(),
-            # ArcGIS Pro's propy.bat inherits a Windows code page. ASCII-only
-            # JSON keeps stdin/stdout stable regardless of that code page.
-            input=json.dumps(request, ensure_ascii=True),
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
-            timeout=self.timeout,
-            cwd=str(ROOT),
-            check=False,
-        )
-        stdout = completed.stdout.strip()
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or stdout or f"exit code {completed.returncode}"
-            raise RuntimeError(f"ArcGIS worker failed: {detail}")
+    @staticmethod
+    def _worker_result(stdout: str, stderr: str = "") -> Any:
+        stdout = stdout.strip()
         if not stdout:
-            raise RuntimeError(f"ArcGIS worker returned no JSON. stderr: {completed.stderr.strip()}")
+            raise RuntimeError(f"ArcGIS worker returned no JSON. stderr: {stderr.strip()}")
         try:
             response = json.loads(stdout.splitlines()[-1])
         except json.JSONDecodeError as exc:
@@ -5117,7 +5102,74 @@ class ArcGISMCP:
             raise RuntimeError(response.get("error", "Unknown ArcGIS worker error"))
         return response.get("result")
 
-    def _run_live(self, action: str, payload: dict[str, Any]) -> Any:
+    @staticmethod
+    def _windows_security_block(error: Exception) -> bool:
+        message = str(error).casefold()
+        return any(
+            marker in message
+            for marker in (
+                "winerror 225",
+                "error_virus_infected",
+                "contains a virus",
+                "potentially unwanted software",
+                "包含病毒",
+                "潜在的垃圾软件",
+            )
+        )
+
+    def _run_worker_via_live_bridge(self, request: dict[str, Any]) -> Any:
+        response = self._run_live(
+            "run_arcpy_worker",
+            {
+                "worker_path": str(WORKER),
+                "request": request,
+                "timeout_seconds": self.timeout,
+            },
+            timeout_seconds=self.timeout + 30,
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("ArcGIS Pro returned an invalid ArcPy worker response")
+        return self._worker_result(json.dumps(response, ensure_ascii=False))
+
+    def _run_worker(self, action: str, payload: dict[str, Any]) -> Any:
+        if not self.arcgis_python.exists():
+            raise FileNotFoundError(f"ArcGIS Python launcher not found: {self.arcgis_python}")
+        request = {"action": action, "payload": payload}
+        try:
+            completed = subprocess.run(
+                self._worker_command(),
+                # ArcGIS Pro's propy.bat inherits a Windows code page. ASCII-only
+                # JSON keeps stdin/stdout stable regardless of that code page.
+                input=json.dumps(request, ensure_ascii=True),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=self.timeout,
+                cwd=str(ROOT),
+                check=False,
+            )
+            stdout = completed.stdout.strip()
+            if completed.returncode != 0:
+                detail = completed.stderr.strip() or stdout or f"exit code {completed.returncode}"
+                raise RuntimeError(f"ArcGIS worker failed: {detail}")
+            return self._worker_result(stdout, completed.stderr)
+        except Exception as direct_error:
+            if not self.live_arcpy_worker_fallback or not self._windows_security_block(direct_error):
+                raise
+            try:
+                return self._run_worker_via_live_bridge(request)
+            except Exception as live_error:
+                raise RuntimeError(
+                    f"{direct_error}\nArcGIS Pro ArcPy fallback also failed: {live_error}"
+                ) from live_error
+
+    def _run_live(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        timeout_seconds: int | None = None,
+    ) -> Any:
         job_id = uuid.uuid4().hex
         job = {"id": job_id, "action": action, "payload": payload, "created_at": time.time()}
         temp_path = self.live_queue / "jobs" / f".{job_id}.tmp"
@@ -5126,7 +5178,9 @@ class ArcGISMCP:
         temp_path.write_text(json.dumps(job, ensure_ascii=True), encoding="ascii")
         temp_path.replace(job_path)
 
-        deadline = time.monotonic() + self.live_timeout
+        deadline = time.monotonic() + (
+            self.live_timeout if timeout_seconds is None else timeout_seconds
+        )
         while time.monotonic() < deadline:
             if result_path.exists():
                 result = json.loads(result_path.read_text(encoding="utf-8"))
