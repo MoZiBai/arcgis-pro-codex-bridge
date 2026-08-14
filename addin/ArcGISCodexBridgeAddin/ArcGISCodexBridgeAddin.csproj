@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <RootNamespace>ArcGISCodexBridgeAddin</RootNamespace>
+    <AssemblyName>ArcGISCodexBridgeAddin</AssemblyName>
+    <Version>0.27.3</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <GenerateRuntimeConfigurationFiles>false</GenerateRuntimeConfigurationFiles>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <ArcGISProInstallDir Condition="'$(ArcGISProInstallDir)' == ''">C:\Program Files\ArcGIS\Pro\</ArcGISProInstallDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ArcGIS.Core">
+      <HintPath>$(ArcGISProInstallDir)\bin\ArcGIS.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Framework">
+      <HintPath>$(ArcGISProInstallDir)\bin\ArcGIS.Desktop.Framework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Core">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\Core\ArcGIS.Desktop.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Mapping">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\Mapping\ArcGIS.Desktop.Mapping.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Catalog">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\Catalog\ArcGIS.Desktop.Catalog.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Layouts">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\Layout\ArcGIS.Desktop.Layouts.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Editing">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\Editing\ArcGIS.Desktop.Editing.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.TaskAssistant">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\TaskAssistant\ArcGIS.Desktop.TaskAssistant.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.KnowledgeGraph">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\KnowledgeGraph\ArcGIS.Desktop.KnowledgeGraph.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ArcGIS.Desktop.Workflow.Client">
+      <HintPath>$(ArcGISProInstallDir)\bin\Extensions\Workflow\ArcGIS.Desktop.Workflow.Client.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Config.daml" />
+  </ItemGroup>
+
+  <Import Project="$(ArcGISProInstallDir)\bin\Esri.ProApp.SDK.Desktop.targets" />
+
+  <!-- Packaging is performed by the ArcGIS targets. Registration is a separate,
+       explicit install step so normal builds do not modify the user profile. -->
+  <PropertyGroup>
+    <ArcGISFolder>$(MSBuildProjectDirectory)\.no-auto-register</ArcGISFolder>
+  </PropertyGroup>
+</Project>

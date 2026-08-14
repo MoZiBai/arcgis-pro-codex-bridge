@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local configuration and credentials
+config.json
+config.local.json
+*.local.json
+.env
+.env.*
+!.env.example
+
+# Codex/agent machine-local state
+.agents/
+.codex/
+/AGENTS.md
+
+# GIS source data, generated maps, runtime queues, and temporary files
+outputs/
+bridge_queue/
+tmp/
+*.log
+*.lock
+*.previous
+
+# Local one-off cartography/probe scripts tied to unpublished datasets
+scripts/create_hubei_*.py
+scripts/refine_latest_hubei_*.py
+scripts/fix_latest_hubei_*.py
+scripts/restore_hubei_*.py
+scripts/report_section_probe.py
+scripts/*yichang*.py
+
+# Local runtimes and downloaded tooling
+.dotnet/
+.dotnet-install.ps1
+fastctx/
+
+# .NET / ArcGIS Pro Add-in build outputs
+addin/**/bin/
+addin/**/obj/
+addin/**/.no-auto-register/
+*.esriAddInX
+*.user
+*.suo
+.vs/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

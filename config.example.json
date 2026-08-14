@@ -1,0 +1,21 @@
+{
+  "arcgis_python": "C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\envs\\arcgispro-py3\\python.exe",
+  "allowed_data_roots": [
+    "C:\\GISData"
+  ],
+  "output_root": "C:\\GISOutput",
+  "live_bridge_queue": "C:\\Users\\YOUR_NAME\\AppData\\Local\\ArcGISCodexBridge\\queue",
+  "live_bridge_timeout_seconds": 180,
+  "timeout_seconds": 1800,
+  "allow_destructive_tools": false,
+  "allow_source_editing": false,
+  "allow_schema_changes": false,
+  "allow_external_publishing": false,
+  "allow_external_workflow_actions": false,
+  "allow_framework_ui_control": false,
+  "allowed_framework_commands": [],
+  "allowed_framework_panes": [],
+  "allowed_framework_tabs": [],
+  "allowed_framework_tools": [],
+  "allowed_backstage_pages": []
+}
