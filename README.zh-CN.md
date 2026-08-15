@@ -12,6 +12,7 @@ ArcGIS Pro 项目，无需鼠标键盘自动化。
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
 [![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.2-486581)](docs/live-bridge-protocol-v0.28.2.md)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
+[![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 当前版本提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
 会话。服务器可作为标准 stdio MCP 注册到 Codex，也可供其他兼容 MCP 的客户端使用。
@@ -218,3 +219,12 @@ Release 生命周期测试在临时目录中完成解压、逐文件哈希验证
 - [能力矩阵](docs/capability-matrix.md)
 - [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)
 - [v0.28.2 Release 说明](docs/release-v0.28.2.md)
+
+## 许可证
+
+版权所有 © 2026 MoZiBai。
+
+本项目采用 [Apache License 2.0](LICENSE) 开源许可证。
+
+ArcGIS Pro 与 ArcGIS Pro SDK 是 Esri 产品，仍受 Esri 自身许可条款约束；它们只是
+本项目的依赖，并不因本仓库采用 Apache-2.0 而被重新许可。

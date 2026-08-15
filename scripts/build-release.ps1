@@ -102,6 +102,7 @@ try {
     $releaseNotesRelative = "docs\release-v$Version.md"
     $protocolRelative = "docs\live-bridge-protocol-v$Version.md"
     $releaseFiles = @(
+        'LICENSE',
         'README.md',
         'README.zh-CN.md',
         'config.example.json',

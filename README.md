@@ -12,6 +12,7 @@ server, ArcPy, and an ArcGIS Pro SDK add-in—without mouse or keyboard automati
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
 [![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.2-486581)](docs/live-bridge-protocol-v0.28.2.md)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#security-boundaries)
+[![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
 The current release exposes 253 MCP tools. Of these, 236 use the add-in to work
 with the active ArcGIS Pro session. The server can be registered as a standard
@@ -248,3 +249,12 @@ The add-in is retained by default. Remove it explicitly with:
 - [Capability matrix](docs/capability-matrix.md)
 - [SDK coverage audit](docs/sdk-coverage-audit-v0.27.md)
 - [Release notes v0.28.2](docs/release-v0.28.2.md)
+
+## License
+
+Copyright 2026 MoZiBai.
+
+Licensed under the [Apache License 2.0](LICENSE).
+
+ArcGIS Pro and the ArcGIS Pro SDK are Esri products governed by Esri's own
+license terms; they are dependencies and are not relicensed by this repository.

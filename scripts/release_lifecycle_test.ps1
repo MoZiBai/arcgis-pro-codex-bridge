@@ -66,6 +66,7 @@ try {
     }
 
     $expectedFiles = @(
+        'LICENSE',
         'README.md',
         'README.zh-CN.md',
         'config.example.json',
