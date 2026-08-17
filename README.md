@@ -90,8 +90,8 @@ architectures and are not supported by this release.
 Download these files from GitHub Releases:
 
 ```text
-arcgis-pro-codex-bridge-0.28.2-win-x64.zip
-arcgis-pro-codex-bridge-0.28.2-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.29.0-win-x64.zip
+arcgis-pro-codex-bridge-0.29.0-win-x64.zip.sha256
 ```
 
 Verify the SHA-256 checksum, extract the ZIP, and run in PowerShell:
@@ -257,7 +257,7 @@ The add-in is retained by default. Remove it explicitly with:
 - [Live bridge design](docs/live-bridge-design.md)
 - [Capability matrix](docs/capability-matrix.md)
 - [SDK coverage audit](docs/sdk-coverage-audit-v0.27.md)
-- [Release notes v0.28.2](docs/release-v0.28.2.md)
+- [Release notes v0.29.0](docs/release-v0.29.0.md)
 
 ## License
 

@@ -72,8 +72,8 @@ ArcMap / ArcGIS Desktop 10.2–10.8 使用不同的 Python、ArcObjects 和 Add-
 推荐从 GitHub Releases 下载：
 
 ```text
-arcgis-pro-codex-bridge-0.28.2-win-x64.zip
-arcgis-pro-codex-bridge-0.28.2-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.29.0-win-x64.zip
+arcgis-pro-codex-bridge-0.29.0-win-x64.zip.sha256
 ```
 
 验证 SHA-256 后解压，在 PowerShell 中运行：
@@ -227,7 +227,7 @@ Release 生命周期测试在临时目录中完成解压、逐文件哈希验证
 - [实时桥接设计](docs/live-bridge-design.md)
 - [能力矩阵](docs/capability-matrix.md)
 - [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)
-- [v0.28.2 Release 说明](docs/release-v0.28.2.md)
+- [v0.29.0 Release 说明](docs/release-v0.29.0.md)
 
 ## 许可证
 
