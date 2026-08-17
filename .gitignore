@@ -11,6 +11,7 @@ venv/
 config.json
 config.local.json
 *.local.json
+*.key
 .env
 .env.*
 !.env.example

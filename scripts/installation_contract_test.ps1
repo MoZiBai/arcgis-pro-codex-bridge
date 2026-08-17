@@ -9,6 +9,17 @@ $configPath = Join-Path $codexHome 'config.toml'
 New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
 
 try {
+    $privateDirectory = Join-Path $root 'private-queue'
+    $privateFile = Join-Path $privateDirectory 'live-bridge.key'
+    New-Item -ItemType Directory -Path $privateDirectory -Force | Out-Null
+    [System.IO.File]::WriteAllText($privateFile, 'contract-secret')
+    Set-ArcGISBridgePrivatePathAcl -Path $privateDirectory -Container | Out-Null
+    Set-ArcGISBridgePrivatePathAcl -Path $privateFile | Out-Null
+    if (-not (Test-ArcGISBridgePrivatePathAcl -Path $privateDirectory) -or
+        -not (Test-ArcGISBridgePrivatePathAcl -Path $privateFile)) {
+        throw 'Private queue/key ACL contract failed.'
+    }
+
     $initial = @'
 model = "test-model"
 
@@ -263,7 +274,7 @@ args = ["serve"]
         throw 'Changed Add-in preflight did not preserve the entire installation before refusing uninstall.'
     }
 
-    Write-Output 'installation contract ok: exact ownership, config preservation, Add-in target/uninstall preflight, restart safety, and custom locators'
+    Write-Output 'installation contract ok: private ACLs, exact ownership, config preservation, Add-in target/uninstall preflight, restart safety, and custom locators'
 }
 finally {
     if (Test-Path -LiteralPath $root) {

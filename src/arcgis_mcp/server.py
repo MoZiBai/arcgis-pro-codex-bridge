@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -16,11 +19,76 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.28.2"
+VERSION = "0.29.0"
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = Path(__file__).with_name("worker.py")
 LOG = logging.getLogger("arcgis_mcp")
 EMIT_LOCK = threading.Lock()
+MCP_PROTOCOL_VERSION = "2024-11-05"
+SUPPORTED_MCP_PROTOCOL_VERSIONS = frozenset({MCP_PROTOCOL_VERSION})
+QUEUE_SIGNATURE_VERSION = "hmac-sha256-v1"
+
+
+def _negotiate_mcp_protocol_version(client_version: Any) -> str:
+    if isinstance(client_version, str) and client_version in SUPPORTED_MCP_PROTOCOL_VERSIONS:
+        return client_version
+    return MCP_PROTOCOL_VERSION
+
+
+def _encode_signed_queue_envelope(payload: dict[str, Any], key: bytes) -> str:
+    payload_json = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    signature = hmac.new(key, payload_json.encode("utf-8"), hashlib.sha256).hexdigest()
+    return json.dumps(
+        {
+            "payload_json": payload_json,
+            "signature": signature,
+            "signature_version": QUEUE_SIGNATURE_VERSION,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _decode_signed_queue_envelope(text: str, key: bytes) -> dict[str, Any]:
+    try:
+        envelope = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Queue envelope is not valid JSON") from exc
+    if not isinstance(envelope, dict):
+        raise ValueError("Queue envelope must be a JSON object")
+    if envelope.get("signature_version") != QUEUE_SIGNATURE_VERSION:
+        raise ValueError("Queue envelope uses an unsupported signature version")
+    payload_json = envelope.get("payload_json")
+    signature = envelope.get("signature")
+    if not isinstance(payload_json, str) or not isinstance(signature, str):
+        raise ValueError("Queue envelope is missing its signed payload or signature")
+    expected = hmac.new(key, payload_json.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise PermissionError("Queue envelope signature verification failed")
+    try:
+        payload = json.loads(payload_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Signed queue payload is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Signed queue payload must be a JSON object")
+    return payload
+
+
+_ABSOLUTE_PATH_PATTERN = re.compile(r"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n]*")
+
+
+def _safe_error_message(error: BaseException) -> str:
+    message = str(error).strip() or type(error).__name__
+    message = _ABSOLUTE_PATH_PATTERN.sub("<path>", message)
+    if len(message) > 1000:
+        message = message[:997] + "..."
+    return message
 
 
 class RequestCancelled(RuntimeError):
@@ -3065,7 +3133,12 @@ TOOLS = [
                 "map_member_name": {"type": "string"},
                 "field_names": {"type": "array", "items": {"type": "string"}, "maxItems": 500},
                 "definition_query": {"type": ["string", "null"]},
-                "use_selection": {"type": "boolean", "default": False},
+                "use_selection": {
+                    "type": "boolean",
+                    "enum": [False],
+                    "default": False,
+                    "description": "Must remain false on ArcGIS Pro 3.6; use definition_query for filtering.",
+                },
                 "group_fields": {"type": "array", "items": {"type": "string"}, "maxItems": 50},
                 "statistics": {
                     "type": "array",
@@ -4672,6 +4745,12 @@ class ArcGISMCP:
         }
         self.live_queue = Path(self.config.get("live_bridge_queue", ROOT / "bridge_queue")).resolve()
         self.live_timeout = int(self.config.get("live_bridge_timeout_seconds", 180))
+        self.include_debug_details = bool(self.config.get("include_debug_details", False))
+        signing_key_path = self.config.get("live_bridge_hmac_key_file")
+        if not signing_key_path:
+            signing_key_path = self.config_path.parent / "live-bridge.key"
+        self.live_signing_key_path = Path(signing_key_path).resolve()
+        self.live_signing_key = self._load_queue_signing_key(self.live_signing_key_path)
         self.live_arcpy_worker_fallback = bool(
             self.config.get("live_arcpy_worker_fallback", True)
         )
@@ -4713,6 +4792,23 @@ class ArcGISMCP:
         if not data["allowed_data_roots"]:
             raise ValueError("allowed_data_roots must contain at least one directory")
         return data
+
+    @staticmethod
+    def _load_queue_signing_key(path: Path) -> bytes:
+        if not path.is_file():
+            raise FileNotFoundError(
+                "Live bridge signing key was not found. Re-run the installer to repair "
+                "the private queue configuration."
+            )
+        try:
+            key = base64.b64decode(path.read_text(encoding="ascii").strip(), validate=True)
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                "Live bridge signing key is unreadable or invalid. Re-run the installer."
+            ) from exc
+        if len(key) < 32:
+            raise ValueError("Live bridge signing key must contain at least 32 random bytes")
+        return key
 
     def _arcgis_install_root(self) -> Path:
         configured = self.config.get("arcgis_pro_install_dir")
@@ -5273,7 +5369,10 @@ class ArcGISMCP:
         job_path = self.live_queue / "jobs" / f"{job_id}.json"
         result_path = self.live_queue / "results" / f"{job_id}.json"
         cancellation_path = self.live_queue / "cancellations" / f"{job_id}.json"
-        temp_path.write_text(json.dumps(job, ensure_ascii=True), encoding="ascii")
+        temp_path.write_text(
+            _encode_signed_queue_envelope(job, self.live_signing_key),
+            encoding="ascii",
+        )
         temp_path.replace(job_path)
 
         deadline = time.monotonic() + timeout
@@ -5281,19 +5380,28 @@ class ArcGISMCP:
             while time.monotonic() < deadline:
                 self._check_cancelled()
                 if result_path.exists():
-                    result = json.loads(result_path.read_text(encoding="utf-8"))
+                    try:
+                        result = _decode_signed_queue_envelope(
+                            result_path.read_text(encoding="utf-8"),
+                            self.live_signing_key,
+                        )
+                    except (OSError, ValueError, PermissionError) as exc:
+                        result_path.unlink(missing_ok=True)
+                        LOG.warning("Rejected an invalid signed bridge result: %s", exc)
+                        time.sleep(0.1)
+                        continue
                     result_path.unlink(missing_ok=True)
                     session_id = result.get("bridge_session_id")
                     if not isinstance(session_id, str) or not session_id:
                         raise RuntimeError(
-                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.28.2 and restart ArcGIS Pro."
+                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.29.0 and restart ArcGIS Pro."
                         )
                     with self._live_identity_lock:
                         self._live_session_id = session_id
                         self._live_project_path = result.get("project_path")
                     if not result.get("ok"):
                         error = result.get("error", "ArcGIS Pro live bridge error")
-                        detail = result.get("detail")
+                        detail = result.get("detail") if self.include_debug_details else None
                         if detail and detail != error:
                             error = f"{error}\n{detail}"
                         raise RuntimeError(error)
@@ -5307,7 +5415,10 @@ class ArcGISMCP:
             job_path.unlink(missing_ok=True)
             cancellation_temp = cancellation_path.with_suffix(".tmp")
             cancellation_temp.write_text(
-                json.dumps({"id": job_id, "cancelled_at": time.time()}),
+                _encode_signed_queue_envelope(
+                    {"id": job_id, "cancelled_at": time.time()},
+                    self.live_signing_key,
+                ),
                 encoding="ascii",
             )
             cancellation_temp.replace(cancellation_path)
@@ -7078,13 +7189,31 @@ def serve(server: ArcGISMCP) -> None:
         except Exception as exc:
             if isinstance(exc, RequestCancelled):
                 LOG.info("Tool request cancelled: %s", request_id)
+                emit(response(request_id, error={
+                    "code": -32800,
+                    "message": _safe_error_message(exc),
+                    "data": {"type": type(exc).__name__},
+                }))
             else:
-                LOG.exception("Tool request failed")
-            emit(response(request_id, error={
-                "code": -32800 if isinstance(exc, RequestCancelled) else -32000,
-                "message": str(exc),
-                "data": {"type": type(exc).__name__},
-            }))
+                if bool(getattr(server, "include_debug_details", False)):
+                    LOG.exception("Tool request failed")
+                else:
+                    LOG.error(
+                        "Tool request failed (%s): %s",
+                        type(exc).__name__,
+                        _safe_error_message(exc),
+                    )
+                tool_error = {
+                    "error": _safe_error_message(exc),
+                    "type": type(exc).__name__,
+                }
+                emit(response(request_id, result={
+                    "content": [{
+                        "type": "text",
+                        "text": json.dumps(tool_error, ensure_ascii=False),
+                    }],
+                    "isError": True,
+                }))
 
     try:
         input_stream = sys.stdin.buffer
@@ -7101,7 +7230,9 @@ def serve(server: ArcGISMCP) -> None:
 
                 if method == "initialize":
                     result = {
-                        "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                        "protocolVersion": _negotiate_mcp_protocol_version(
+                            params.get("protocolVersion")
+                        ),
                         "capabilities": {"tools": {"listChanged": False}},
                         "serverInfo": {"name": "arcgis-pro-mcp", "version": VERSION},
                         "instructions": SERVER_INSTRUCTIONS,
@@ -7149,11 +7280,18 @@ def serve(server: ArcGISMCP) -> None:
                 if request_id is not None:
                     emit(response(request_id, result=result))
             except Exception as exc:
-                LOG.exception("Request failed")
+                if bool(getattr(server, "include_debug_details", False)):
+                    LOG.exception("Request failed")
+                else:
+                    LOG.error(
+                        "Request failed (%s): %s",
+                        type(exc).__name__,
+                        _safe_error_message(exc),
+                    )
                 if request_id is not None:
                     error = {
                         "code": -32000,
-                        "message": str(exc),
+                        "message": _safe_error_message(exc),
                         "data": {"type": type(exc).__name__},
                     }
                     emit(response(request_id, error=error))

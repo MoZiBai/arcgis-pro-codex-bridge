@@ -346,6 +346,91 @@ function Test-ArcGISBridgePathWithinDirectory {
     )
 }
 
+function Set-ArcGISBridgePrivatePathAcl {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$Container
+    )
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        throw 'Private ACL configuration is supported on Windows only.'
+    }
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $resolved)) {
+        throw "Cannot secure a missing path: $resolved"
+    }
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    if (-not $currentSid) {
+        throw 'Could not resolve the current Windows user SID.'
+    }
+    $security = if ($Container) {
+        [System.Security.AccessControl.DirectorySecurity]::new()
+    }
+    else {
+        [System.Security.AccessControl.FileSecurity]::new()
+    }
+    $security.SetOwner($currentSid)
+    $security.SetAccessRuleProtection($true, $false)
+    $inheritance = if ($Container) {
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    }
+    else {
+        [System.Security.AccessControl.InheritanceFlags]::None
+    }
+    $sids = @(
+        $currentSid,
+        [System.Security.Principal.SecurityIdentifier]::new(
+            [System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null),
+        [System.Security.Principal.SecurityIdentifier]::new(
+            [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    )
+    foreach ($sid in $sids) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow)
+        [void]$security.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $resolved -AclObject $security
+    return $resolved
+}
+
+function Test-ArcGISBridgePrivatePathAcl {
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
+        -not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+    $acl = Get-Acl -LiteralPath $Path
+    if (-not $acl.AreAccessRulesProtected) {
+        return $false
+    }
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $blockedSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
+    $currentUserAllowed = $false
+    foreach ($rule in $acl.Access) {
+        $sid = try {
+            $rule.IdentityReference.Translate(
+                [System.Security.Principal.SecurityIdentifier]).Value
+        }
+        catch { [string]$rule.IdentityReference }
+        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) {
+            if ($blockedSids -contains $sid) {
+                return $false
+            }
+            if ($sid -eq $currentSid -and
+                ($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl)) {
+                $currentUserAllowed = $true
+            }
+        }
+    }
+    return $currentUserAllowed
+}
+
 function Resolve-ArcGISBridgePython {
     param([string]$Python = '')
 
@@ -451,6 +536,8 @@ Export-ModuleMember -Function @(
     'Test-ArcGISBridgeGlobalMcpRegistration',
     'Get-ArcGISBridgeAddinPackageInfo',
     'Test-ArcGISBridgePathWithinDirectory',
+    'Set-ArcGISBridgePrivatePathAcl',
+    'Test-ArcGISBridgePrivatePathAcl',
     'Resolve-ArcGISBridgePython',
     'Resolve-ArcGISBridgeProInstall',
     'Assert-ArcGISBridgeSafeInstallRoot'

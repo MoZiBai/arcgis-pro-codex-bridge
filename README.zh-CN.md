@@ -10,11 +10,12 @@
 ArcGIS Pro 项目，无需鼠标键盘自动化。
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.2-486581)](docs/live-bridge-protocol-v0.28.2.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.29.0-486581)](docs/live-bridge-protocol-v0.29.0.md)
+[![CI](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
 [![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-当前版本提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
+当前源码提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
 会话。服务器可作为标准 stdio MCP 注册到 Codex，也可供其他兼容 MCP 的客户端使用。
 
 ## 主要能力
@@ -87,7 +88,7 @@ arcgis-pro-codex-bridge-0.28.2-win-x64.zip.sha256
 
 1. 检查 ArcGIS Pro 3.6 与系统 Python。
 2. 将 MCP 运行时安装到 `%LOCALAPPDATA%\ArcGISCodexBridge`。
-3. 生成机器私有的安全配置。
+3. 生成机器私有的安全配置、HMAC 密钥和 Windows ACL。
 4. 校验并安装预编译 `.esriAddinX`。
 5. 在用户级 `~/.codex/config.toml` 注册 `arcgis-pro` MCP。
 
@@ -132,6 +133,8 @@ ArcPy 运行时。Windows Security 报告 ArcGIS DLL 时，应优先检查 Prote
 | `allowed_data_roots` | 允许读取的数据根目录 | 安装目录内的 `data` |
 | `output_root` | 所有派生输出的根目录 | 安装目录内的 `outputs` |
 | `live_bridge_queue` | MCP 与 Add-in 的本地队列 | 安装目录内的 `queue` |
+| `live_bridge_hmac_key_file` | 队列消息认证使用的私有 HMAC 密钥 | 安装目录内的 `config/live-bridge.key` |
+| `include_debug_details` | 在私有诊断详情/日志中记录完整 Add-in 异常 | `false` |
 | `allow_source_editing` | 允许修改源数据 | `false` |
 | `allow_destructive_tools` | 允许删除或清空操作 | `false` |
 | `allow_schema_changes` | 允许字段和结构修改 | `false` |
@@ -147,6 +150,11 @@ ArcPy 运行时。Windows Security 报告 ArcGIS DLL 时，应优先检查 Prote
 - 删除、清空、源数据编辑、结构修改、发布和外部工作流动作默认关闭。
 - 通用 ArcPy 执行器与专用工具使用相同安全门，不能绕过策略。
 - Framework 控制需要总开关和精确 ID 允许列表同时授权。
+- Job、Result 和 Cancellation 队列消息全部使用 HMAC-SHA256 认证。
+- 安装器关闭私有配置、签名密钥和队列的继承 ACL，只保留当前用户、SYSTEM 和
+  Administrators 的访问权限。
+- 对外 MCP 错误始终隐藏绝对路径；只有显式启用 `include_debug_details` 才在私有
+  Add-in 诊断详情/日志中记录完整异常。
 - 工程文件修改优先写入新的 `.aprx` 副本。
 - ArcPy 安全回退仅响应明确的 Windows Security 加载错误；普通异常不会触发回退。
 - 回退 worker 固定为稳定安装目录中的 `runtime\worker.py`，Python 固定来自当前
@@ -186,6 +194,7 @@ ArcPy 运行时。Windows Security 报告 ArcGIS DLL 时，应优先检查 Prote
 
 ```powershell
 python .\scripts\protocol_contract_test.py
+python .\scripts\mcp_protocol_contract_test.py
 python .\scripts\version_contract_test.py
 python .\scripts\safety_contract_test.py
 python .\scripts\runtime_safety_contract_test.py
@@ -214,7 +223,7 @@ Release 生命周期测试在临时目录中完成解压、逐文件哈希验证
 ## 文档
 
 - [安装与生命周期](docs/installation.md)
-- [v0.28.2 协议](docs/live-bridge-protocol-v0.28.2.md)
+- [v0.29.0 协议](docs/live-bridge-protocol-v0.29.0.md)
 - [实时桥接设计](docs/live-bridge-design.md)
 - [能力矩阵](docs/capability-matrix.md)
 - [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)

@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ArcGIS.Core.CIM;
 using ArcGIS.Core.Geometry;
 using ArcGIS.Desktop.Core;
@@ -10,7 +13,8 @@ namespace ArcGISCodexBridgeAddin;
 
 internal static class BridgeSupport
 {
-    internal const string ProtocolVersion = "0.28.2";
+    internal const string ProtocolVersion = "0.29.0";
+    internal const string QueueSignatureVersion = "hmac-sha256-v1";
 
     internal static string ResolveInstallRoot()
     {
@@ -75,6 +79,145 @@ internal static class BridgeSupport
             // A malformed or unavailable private config falls back to the stable queue.
         }
         return defaultRoot;
+    }
+
+    internal static string ResolveSigningKeyPath()
+    {
+        var installRoot = ResolveInstallRoot();
+        var defaultPath = System.IO.Path.Combine(installRoot, "config", "live-bridge.key");
+        var configPath = System.IO.Path.Combine(installRoot, "config", "config.json");
+        try
+        {
+            if (!System.IO.File.Exists(configPath))
+            {
+                return defaultPath;
+            }
+            using var document = JsonDocument.Parse(System.IO.File.ReadAllText(configPath));
+            if (document.RootElement.TryGetProperty("live_bridge_hmac_key_file", out var keyPath)
+                && keyPath.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(keyPath.GetString()))
+            {
+                return System.IO.Path.GetFullPath(keyPath.GetString()!);
+            }
+        }
+        catch
+        {
+            // The stable install-relative key remains the only fallback.
+        }
+        return defaultPath;
+    }
+
+    internal static byte[] LoadQueueSigningKey()
+    {
+        var keyPath = ResolveSigningKeyPath();
+        if (!System.IO.File.Exists(keyPath))
+        {
+            throw new InvalidOperationException(
+                "The live bridge signing key is missing. Re-run the installer to repair it.");
+        }
+        byte[] key;
+        try
+        {
+            key = Convert.FromBase64String(System.IO.File.ReadAllText(keyPath).Trim());
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidOperationException(
+                "The live bridge signing key is invalid. Re-run the installer.", exception);
+        }
+        if (key.Length < 32)
+        {
+            throw new InvalidOperationException(
+                "The live bridge signing key must contain at least 32 random bytes.");
+        }
+        return key;
+    }
+
+    internal static bool IncludeDebugDetails()
+    {
+        var configPath = System.IO.Path.Combine(
+            ResolveInstallRoot(), "config", "config.json");
+        try
+        {
+            if (!System.IO.File.Exists(configPath))
+            {
+                return false;
+            }
+            using var document = JsonDocument.Parse(System.IO.File.ReadAllText(configPath));
+            return document.RootElement.TryGetProperty("include_debug_details", out var value)
+                && value.ValueKind is JsonValueKind.True;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static string CreateSignedEnvelope(object payload, byte[] key)
+    {
+        var payloadJson = JsonSerializer.Serialize(payload);
+        using var hmac = new HMACSHA256(key);
+        var signature = Convert.ToHexString(
+            hmac.ComputeHash(Encoding.UTF8.GetBytes(payloadJson))).ToLowerInvariant();
+        return JsonSerializer.Serialize(new
+        {
+            payload_json = payloadJson,
+            signature,
+            signature_version = QueueSignatureVersion,
+        });
+    }
+
+    internal static JsonDocument OpenVerifiedSignedPayload(string envelopeJson, byte[] key)
+    {
+        using var envelope = JsonDocument.Parse(envelopeJson);
+        var root = envelope.RootElement;
+        var version = root.TryGetProperty("signature_version", out var versionElement)
+            && versionElement.ValueKind == JsonValueKind.String
+                ? versionElement.GetString()
+                : null;
+        var payloadJson = root.TryGetProperty("payload_json", out var payloadElement)
+            && payloadElement.ValueKind == JsonValueKind.String
+                ? payloadElement.GetString()
+                : null;
+        var signatureText = root.TryGetProperty("signature", out var signatureElement)
+            && signatureElement.ValueKind == JsonValueKind.String
+                ? signatureElement.GetString()
+                : null;
+        if (!string.Equals(version, QueueSignatureVersion, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(payloadJson)
+            || string.IsNullOrWhiteSpace(signatureText))
+        {
+            throw new InvalidOperationException("The queue envelope is unsigned or malformed.");
+        }
+
+        byte[] suppliedSignature;
+        try
+        {
+            suppliedSignature = Convert.FromHexString(signatureText);
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidOperationException("The queue signature is malformed.", exception);
+        }
+        using var hmac = new HMACSHA256(key);
+        var expectedSignature = hmac.ComputeHash(Encoding.UTF8.GetBytes(payloadJson));
+        if (!CryptographicOperations.FixedTimeEquals(suppliedSignature, expectedSignature))
+        {
+            throw new UnauthorizedAccessException("Queue envelope signature verification failed.");
+        }
+        return JsonDocument.Parse(payloadJson);
+    }
+
+    internal static string SafeErrorMessage(Exception exception)
+    {
+        var message = string.IsNullOrWhiteSpace(exception.Message)
+            ? exception.GetType().Name
+            : exception.Message.Trim();
+        message = Regex.Replace(
+            message,
+            @"(?i)(?:[a-z]:[\\/]|\\\\)[^\r\n]*",
+            "<path>");
+        return message.Length <= 1000 ? message : message[..997] + "...";
     }
 
     internal static readonly string[] Capabilities =

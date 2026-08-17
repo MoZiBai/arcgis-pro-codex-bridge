@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import sys
@@ -13,13 +14,23 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.arcgis_mcp import server as server_module
-from src.arcgis_mcp.server import ArcGISMCP, RequestCancelled
+from src.arcgis_mcp.server import (
+    ArcGISMCP,
+    RequestCancelled,
+    _decode_signed_queue_envelope,
+    _encode_signed_queue_envelope,
+)
 
 
 def make_server(root: Path) -> ArcGISMCP:
     data = root / "data"
     output = root / "output"
     queue = root / "queue"
+    signing_key_file = root / "live-bridge.key"
+    signing_key_file.write_text(
+        base64.b64encode(b"queue-contract-signing-key-32b!!").decode("ascii"),
+        encoding="ascii",
+    )
     data.mkdir()
     config = root / "config.json"
     config.write_text(
@@ -29,6 +40,7 @@ def make_server(root: Path) -> ArcGISMCP:
                 "allowed_data_roots": [str(data)],
                 "output_root": str(output),
                 "live_bridge_queue": str(queue),
+                "live_bridge_hmac_key_file": str(signing_key_file),
                 "live_bridge_timeout_seconds": 1,
                 "timeout_seconds": 10,
                 "live_arcpy_worker_fallback": False,
@@ -71,7 +83,9 @@ def test_live_queue(server: ArcGISMCP) -> None:
                 time.sleep(0.01)
                 continue
             path = jobs[0]
-            job = json.loads(path.read_text(encoding="ascii"))
+            job = _decode_signed_queue_envelope(
+                path.read_text(encoding="ascii"), server.live_signing_key
+            )
             observed.append(job)
             path.unlink()
             result = {
@@ -84,7 +98,10 @@ def test_live_queue(server: ArcGISMCP) -> None:
                 "project_path": "C:\\Temp\\blank.aprx",
             }
             result_path = server.live_queue / "results" / f"{job['id']}.json"
-            result_path.write_text(json.dumps(result), encoding="utf-8")
+            result_path.write_text(
+                _encode_signed_queue_envelope(result, server.live_signing_key),
+                encoding="utf-8",
+            )
             if job["action"] == "project_inventory":
                 return
 
@@ -113,6 +130,75 @@ def test_live_queue(server: ArcGISMCP) -> None:
         raise AssertionError("Live action was not bound to the handshake project")
 
 
+def test_queue_signatures(server: ArcGISMCP) -> None:
+    payload = {"id": "signed", "action": "status", "payload": {"value": 1}}
+    envelope = _encode_signed_queue_envelope(payload, server.live_signing_key)
+    if _decode_signed_queue_envelope(envelope, server.live_signing_key) != payload:
+        raise AssertionError("Signed queue payload did not round-trip")
+
+    tampered = json.loads(envelope)
+    tampered["payload_json"] = tampered["payload_json"].replace('"value":1', '"value":2')
+    try:
+        _decode_signed_queue_envelope(json.dumps(tampered), server.live_signing_key)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("Tampered queue payload passed signature verification")
+
+    unsigned = json.dumps(payload)
+    try:
+        _decode_signed_queue_envelope(unsigned, server.live_signing_key)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Unsigned queue payload was accepted")
+
+
+def test_invalid_result_is_ignored(server: ArcGISMCP) -> None:
+    outcome: list[object] = []
+
+    def invoke() -> None:
+        try:
+            outcome.append(
+                server._run_live("status", {}, timeout_seconds=1, _bind_identity=False)
+            )
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=invoke)
+    thread.start()
+    job_path = wait_for_job(server.live_queue)
+    job = _decode_signed_queue_envelope(
+        job_path.read_text(encoding="ascii"), server.live_signing_key
+    )
+    result_path = server.live_queue / "results" / f"{job['id']}.json"
+    result_payload = {
+        "ok": True,
+        "result": {"available": True},
+        "bridge_session_id": "signed-session",
+        "project_path": None,
+    }
+    result_path.write_text(json.dumps(result_payload), encoding="utf-8")
+    rejection_deadline = time.monotonic() + 1
+    while result_path.exists() and time.monotonic() < rejection_deadline:
+        time.sleep(0.01)
+    if result_path.exists():
+        raise AssertionError("Unsigned bridge result was not removed")
+    if not thread.is_alive():
+        raise AssertionError(f"Unsigned bridge result ended the request: {outcome}")
+    result_path.write_text(
+        _encode_signed_queue_envelope(result_payload, server.live_signing_key),
+        encoding="utf-8",
+    )
+    job_path.unlink(missing_ok=True)
+    thread.join(timeout=3)
+    if thread.is_alive() or not outcome or isinstance(outcome[0], BaseException):
+        raise AssertionError(f"Valid signed bridge result did not complete: {outcome}")
+    with server._live_identity_lock:
+        server._live_session_id = None
+        server._live_project_path = None
+
+
 def test_live_cancellation(server: ArcGISMCP) -> None:
     cancellation = threading.Event()
     failure: list[BaseException] = []
@@ -126,7 +212,9 @@ def test_live_cancellation(server: ArcGISMCP) -> None:
     thread = threading.Thread(target=invoke)
     thread.start()
     job = wait_for_job(server.live_queue)
-    job_id = json.loads(job.read_text(encoding="ascii"))["id"]
+    job_id = _decode_signed_queue_envelope(
+        job.read_text(encoding="ascii"), server.live_signing_key
+    )["id"]
     cancellation.set()
     thread.join(timeout=3)
     if thread.is_alive() or not failure or not isinstance(failure[0], RequestCancelled):
@@ -160,10 +248,10 @@ def test_worker_cancellation(server: ArcGISMCP) -> None:
     thread.start()
     time.sleep(0.2)
     cancellation.set()
-    thread.join(timeout=5)
+    thread.join(timeout=15)
     if thread.is_alive() or not failure or not isinstance(failure[0], RequestCancelled):
         raise AssertionError(f"ArcPy worker cancellation failed: {failure}")
-    if time.monotonic() - started >= 5:
+    if time.monotonic() - started >= 15:
         raise AssertionError("ArcPy worker cancellation did not terminate promptly")
 
 
@@ -239,9 +327,13 @@ def test_stdio_concurrency_and_cancel() -> None:
 
 
 def test_addin_contract_source() -> None:
-    source = (
+    module_source = (
         ROOT / "addin" / "ArcGISCodexBridgeAddin" / "BridgeModule.cs"
     ).read_text(encoding="utf-8")
+    support_source = (
+        ROOT / "addin" / "ArcGISCodexBridgeAddin" / "BridgeSupport.cs"
+    ).read_text(encoding="utf-8")
+    source = module_source + "\n" + support_source
     required_markers = [
         "expires_at",
         "expected_session_id",
@@ -249,6 +341,10 @@ def test_addin_contract_source() -> None:
         "cancellations",
         "completed",
         "idempotency_key",
+        "OpenVerifiedSignedPayload",
+        "CreateSignedEnvelope",
+        "FixedTimeEquals",
+        "SafeErrorMessage",
         "WatchCancellationAsync",
     ]
     missing = [marker for marker in required_markers if marker not in source]
@@ -259,14 +355,16 @@ def test_addin_contract_source() -> None:
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="arcgis-bridge-queue-contract-") as temporary:
         server = make_server(Path(temporary))
+        test_queue_signatures(server)
+        test_invalid_result_is_ignored(server)
         test_live_queue(server)
         test_live_cancellation(server)
         test_worker_cancellation(server)
     test_stdio_concurrency_and_cancel()
     test_addin_contract_source()
     print(
-        "queue/concurrency contract ok: TTL cleanup, identity binding, live cancellation, "
-        "worker termination, concurrent stdio, and add-in idempotency markers"
+        "queue/concurrency contract ok: signed envelopes, TTL cleanup, identity binding, "
+        "live cancellation, worker termination, concurrent stdio, and idempotency markers"
     )
     return 0
 

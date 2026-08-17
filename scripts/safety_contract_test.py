@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +22,32 @@ def expect_permission_error(callable_, expected: str) -> None:
         raise AssertionError("Expected PermissionError")
 
 
+def make_server() -> tuple[ArcGISMCP, tempfile.TemporaryDirectory[str]]:
+    temporary = tempfile.TemporaryDirectory(prefix="arcgis-bridge-safety-")
+    root = Path(temporary.name)
+    signing_key = root / "live-bridge.key"
+    signing_key.write_text(
+        base64.b64encode(b"safety-contract-signing-key-32bytes").decode("ascii"),
+        encoding="ascii",
+    )
+    config = root / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "arcgis_python": sys.executable,
+                "allowed_data_roots": [str(ROOT)],
+                "output_root": str(root / "output"),
+                "live_bridge_queue": str(root / "queue"),
+                "live_bridge_hmac_key_file": str(signing_key),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return ArcGISMCP(config), temporary
+
+
 def main() -> int:
-    server = ArcGISMCP(ROOT / "config.json")
+    server, temporary = make_server()
 
     assert server.allow_source_editing is False
     assert server.allow_destructive is False
@@ -186,6 +213,7 @@ def main() -> int:
     )
 
     print("safety contract ok: source edits, destructive edits, schema changes, publishing, workflow mutations, and generic framework UI control default to disabled")
+    temporary.cleanup()
     return 0
 
 

@@ -78,9 +78,9 @@ def require_clean_summary(name: str, summary: dict[str, object]) -> None:
 def main() -> int:
     server = ArcGISMCP(ROOT / "config.json")
     status_before = server._run_live("status", {})
-    if status_before.get("protocol_version") != "0.28.2":
+    if status_before.get("protocol_version") != "0.29.0":
         raise RuntimeError(
-            "ArcGIS Pro has not loaded bridge 0.28.2. Restart ArcGIS Pro before "
+            "ArcGIS Pro has not loaded bridge 0.29.0. Restart ArcGIS Pro before "
             f"running the suite; current={status_before.get('protocol_version')}"
         )
     project_path = Path(str(status_before["project"]))

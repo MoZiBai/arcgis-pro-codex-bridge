@@ -55,6 +55,7 @@ $version = $versionMatch.Matches[0].Groups[1].Value
 $runtimeRoot = Join-Path $InstallRoot 'runtime'
 $configRoot = Join-Path $InstallRoot 'config'
 $configPath = Join-Path $configRoot 'config.json'
+$signingKeyPath = Join-Path $configRoot 'live-bridge.key'
 $toolsRoot = Join-Path $InstallRoot 'tools'
 $serverPath = Join-Path $runtimeRoot 'server.py'
 $defaultDataRoot = Join-Path $InstallRoot 'data'
@@ -103,10 +104,12 @@ if (-not [string]::IsNullOrWhiteSpace($QueueRoot)) {
 elseif (-not $settings.Contains('live_bridge_queue')) {
     $settings['live_bridge_queue'] = $defaultQueueRoot
 }
+$settings['live_bridge_hmac_key_file'] = $signingKeyPath
 
 $defaults = [ordered]@{
     live_bridge_timeout_seconds = 180
     live_arcpy_worker_fallback = $true
+    include_debug_details = $false
     timeout_seconds = 1800
     allow_destructive_tools = $false
     allow_source_editing = $false
@@ -134,6 +137,16 @@ $existingManifest = if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 }
 else { $null }
+$existingManifestAddinDirectory = if ($existingManifest -and
+    ($existingManifest.PSObject.Properties.Name -contains 'addin_directory')) {
+    [string]$existingManifest.addin_directory
+}
+else { '' }
+$existingManifestAddinPackage = if ($existingManifest -and
+    ($existingManifest.PSObject.Properties.Name -contains 'addin_package')) {
+    [string]$existingManifest.addin_package
+}
+else { '' }
 $damlText = Get-Content -LiteralPath (Join-Path $sourceRoot 'addin\ArcGISCodexBridgeAddin\Config.daml') -Raw
 try { $damlXml = [xml]$damlText }
 catch { throw "Source Config.daml is not valid XML: $_" }
@@ -143,8 +156,8 @@ if ([string]::IsNullOrWhiteSpace($addinId)) { throw 'Could not determine the Add
 $resolvedAddinDirectory = if (-not [string]::IsNullOrWhiteSpace($AddinInstallDirectory)) {
     [System.IO.Path]::GetFullPath($AddinInstallDirectory)
 }
-elseif ($existingManifest -and $existingManifest.addin_directory) {
-    [System.IO.Path]::GetFullPath([string]$existingManifest.addin_directory)
+elseif (-not [string]::IsNullOrWhiteSpace($existingManifestAddinDirectory)) {
+    [System.IO.Path]::GetFullPath($existingManifestAddinDirectory)
 }
 else {
     Join-Path ([Environment]::GetFolderPath('MyDocuments')) "ArcGIS\AddIns\ArcGISPro\$addinId"
@@ -176,8 +189,8 @@ if (-not $SkipAddin) {
     if ($selectedAddinInfo.version -ne $version -or $selectedAddinInfo.id -ne $addinId) {
         throw "Add-in package identity $($selectedAddinInfo.id) version $($selectedAddinInfo.version) does not match bridge $addinId version $version."
     }
-    $recordedAddinPackage = if ($existingManifest -and $existingManifest.addin_package) {
-        [System.IO.Path]::GetFullPath([string]$existingManifest.addin_package)
+    $recordedAddinPackage = if (-not [string]::IsNullOrWhiteSpace($existingManifestAddinPackage)) {
+        [System.IO.Path]::GetFullPath($existingManifestAddinPackage)
     }
     else { '' }
     $installedAddinPackage = if ($recordedAddinPackage -and
@@ -193,8 +206,8 @@ if (-not $SkipAddin) {
     }
 }
 else {
-    $installedAddinPackage = if ($existingManifest -and $existingManifest.addin_package) {
-        [System.IO.Path]::GetFullPath([string]$existingManifest.addin_package)
+    $installedAddinPackage = if (-not [string]::IsNullOrWhiteSpace($existingManifestAddinPackage)) {
+        [System.IO.Path]::GetFullPath($existingManifestAddinPackage)
     }
     else {
         Get-ChildItem -LiteralPath $resolvedAddinDirectory -Filter '*.esriAddInX' -File -ErrorAction SilentlyContinue |
@@ -219,6 +232,11 @@ $codexConfigPath = Join-Path $CodexHome 'config.toml'
 $previousRuntime = Join-Path $InstallRoot 'runtime.previous'
 $configExistedBefore = Test-Path -LiteralPath $configPath -PathType Leaf
 $configBefore = if ($configExistedBefore) { [System.IO.File]::ReadAllBytes($configPath) } else { $null }
+$signingKeyExistedBefore = Test-Path -LiteralPath $signingKeyPath -PathType Leaf
+$signingKeyBefore = if ($signingKeyExistedBefore) {
+    [System.IO.File]::ReadAllBytes($signingKeyPath)
+}
+else { $null }
 $manifestExistedBefore = Test-Path -LiteralPath $manifestPath -PathType Leaf
 $manifestBefore = if ($manifestExistedBefore) { [System.IO.File]::ReadAllBytes($manifestPath) } else { $null }
 $probeExistedBefore = Test-Path -LiteralPath $probePath -PathType Leaf
@@ -286,11 +304,35 @@ try {
         }
         New-Item -ItemType Directory -Path $resolvedDataDirectory -Force | Out-Null
     }
+    if (-not (Test-Path -LiteralPath $signingKeyPath -PathType Leaf)) {
+        $keyBytes = [byte[]]::new(32)
+        $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try { $generator.GetBytes($keyBytes) }
+        finally { $generator.Dispose() }
+        [System.IO.File]::WriteAllText(
+            $signingKeyPath,
+            [Convert]::ToBase64String($keyBytes) + [Environment]::NewLine,
+            [System.Text.Encoding]::ASCII)
+    }
+    try {
+        $decodedSigningKey = [Convert]::FromBase64String(
+            [System.IO.File]::ReadAllText($signingKeyPath).Trim())
+    }
+    catch {
+        throw "Existing live bridge signing key is not valid Base64: $signingKeyPath"
+    }
+    if ($decodedSigningKey.Length -lt 32) {
+        throw "Live bridge signing key must contain at least 32 random bytes: $signingKeyPath"
+    }
     [System.IO.File]::WriteAllText(
         $configPath,
         ($settings | ConvertTo-Json -Depth 8) + [Environment]::NewLine,
         [System.Text.UTF8Encoding]::new($false)
     )
+    Set-ArcGISBridgePrivatePathAcl -Path $configRoot -Container | Out-Null
+    Set-ArcGISBridgePrivatePathAcl -Path $configPath | Out-Null
+    Set-ArcGISBridgePrivatePathAcl -Path $signingKeyPath | Out-Null
+    Set-ArcGISBridgePrivatePathAcl -Path ([string]$settings['live_bridge_queue']) -Container | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'mcp_probe.py') -Destination $probePath -Force
 
     if (-not $SkipAddin) {
@@ -354,6 +396,12 @@ catch {
     }
     if ($configExistedBefore) { [System.IO.File]::WriteAllBytes($configPath, $configBefore) }
     elseif (Test-Path -LiteralPath $configPath) { Remove-Item -LiteralPath $configPath -Force }
+    if ($signingKeyExistedBefore) {
+        [System.IO.File]::WriteAllBytes($signingKeyPath, $signingKeyBefore)
+    }
+    elseif (Test-Path -LiteralPath $signingKeyPath) {
+        Remove-Item -LiteralPath $signingKeyPath -Force
+    }
     if ($manifestExistedBefore) { [System.IO.File]::WriteAllBytes($manifestPath, $manifestBefore) }
     elseif (Test-Path -LiteralPath $manifestPath) { Remove-Item -LiteralPath $manifestPath -Force }
     if ($probeExistedBefore) { [System.IO.File]::WriteAllBytes($probePath, $probeBefore) }

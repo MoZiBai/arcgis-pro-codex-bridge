@@ -59,10 +59,15 @@ internal static class ReportActions
                     SortOrder = groupFields.Contains(description.Name) ? index : -1,
                 };
             }).ToArray();
+            if (BridgeSupport.Bool(payload, "use_selection", false))
+            {
+                throw new NotSupportedException(
+                    "ArcGIS Pro 3.6 does not support selection-set filtering when creating a report. " +
+                    "Use a definition_query or create the report from all records instead.");
+            }
             var dataSource = new ReportDataSource(
                 member,
                 BridgeSupport.String(payload, "definition_query", string.Empty)!,
-                BridgeSupport.Bool(payload, "use_selection", false),
                 fields);
 
             var statistics = ReadStatistics(payload, descriptions);

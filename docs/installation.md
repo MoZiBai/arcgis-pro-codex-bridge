@@ -13,7 +13,8 @@ The default installation root is:
 %LOCALAPPDATA%\ArcGISCodexBridge
 ```
 
-It contains a stable MCP runtime, a machine-private `config.json`, a probe
+It contains a stable MCP runtime, a machine-private `config.json`, a random
+32-byte queue-signing key, a probe
 utility, a versioned installation manifest, bounded data/output directories,
 and the live-bridge queue. The installer also:
 
@@ -26,6 +27,9 @@ and the live-bridge queue. The installer also:
   global config;
 - leaves source editing, schema changes, deletion, publishing, external
   workflow actions, and generic Framework UI control disabled.
+- authenticates jobs, results, and cancellation markers with HMAC-SHA256;
+- disables inherited ACLs on the private configuration, signing key, and queue,
+  granting access only to the current user, SYSTEM, and local Administrators.
 
 The installed MCP points to the stable runtime rather than the Git clone, so
 moving or deleting the source checkout does not break the registration.
@@ -79,8 +83,8 @@ and third-party global MCP managers such as Codex++.
 ## Status and diagnostics
 
 The normal status check verifies the manifest, stable files, global MCP entry,
-ArcGIS Pro 3.6, Add-in package, MCP initialization, server instructions, and
-required tool discovery without importing ArcPy:
+ArcGIS Pro 3.6, Add-in package, queue key and ACLs, MCP initialization, server
+instructions, and required tool discovery without importing ArcPy:
 
 ```powershell
 .\scripts\status.ps1

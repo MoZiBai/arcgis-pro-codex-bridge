@@ -19,6 +19,8 @@ namespace ArcGISCodexBridgeAddin;
 internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
 {
     private static readonly string QueueRoot = BridgeSupport.ResolveQueueRoot();
+    private static readonly byte[] QueueSigningKey = BridgeSupport.LoadQueueSigningKey();
+    private static readonly bool IncludeDebugDetails = BridgeSupport.IncludeDebugDetails();
     private static readonly string SessionId = Guid.NewGuid().ToString("N");
     private static readonly TimeSpan CompletedRetention = TimeSpan.FromHours(24);
     private static readonly TimeSpan CancellationRetention = TimeSpan.FromHours(1);
@@ -116,9 +118,9 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
             var jobId = filenameId;
             try
             {
-                await using var stream = File.OpenRead(path);
-                using var document = await JsonDocument.ParseAsync(
-                    stream, cancellationToken: cancellationToken);
+                var envelopeJson = await File.ReadAllTextAsync(path, cancellationToken);
+                using var document = BridgeSupport.OpenVerifiedSignedPayload(
+                    envelopeJson, QueueSigningKey);
                 if (document.RootElement.TryGetProperty("id", out var id)
                     && id.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(id.GetString()))
@@ -134,14 +136,14 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
 
             var resultPath = Path.Combine(resultsDirectory, jobId + ".json");
             var temporaryPath = resultPath + ".tmp";
-            var response = JsonSerializer.Serialize(new
+            var response = BridgeSupport.CreateSignedEnvelope(new
             {
                 ok = false,
                 error = "The previous ArcGIS Pro process ended while this bridge action was running. The interrupted job was recovered at startup.",
                 type = "InterruptedBridgeJob",
                 bridge_session_id = SessionId,
                 project_path = CurrentProjectPath(),
-            });
+            }, QueueSigningKey);
             await File.WriteAllTextAsync(temporaryPath, response, cancellationToken);
             File.Move(temporaryPath, resultPath, true);
             File.Delete(path);
@@ -162,8 +164,9 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
 
         try
         {
-            await using var stream = File.OpenRead(claimedPath);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            var envelopeJson = await File.ReadAllTextAsync(claimedPath, cancellationToken);
+            using var document = BridgeSupport.OpenVerifiedSignedPayload(
+                envelopeJson, QueueSigningKey);
             var root = document.RootElement;
             jobId = SafeIdentifier(root.GetProperty("id").GetString(), filenameId);
             idempotencyKey = SafeIdentifier(
@@ -185,26 +188,28 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
             ValidateJobEnvelope(root, action);
 
             var cancellationPath = Path.Combine(cancellationsDirectory, jobId + ".json");
-            if (File.Exists(cancellationPath))
+            if (await IsValidCancellationAsync(
+                cancellationPath, jobId, cancellationToken))
             {
-                throw new OperationCanceledException("The bridge request was cancelled before execution.");
+                throw new OperationCanceledException(
+                    "The bridge request was cancelled before execution.");
             }
-
             using var actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var watcher = WatchCancellationAsync(
                 cancellationPath,
+                jobId,
                 actionCancellation,
                 cancellationToken);
             try
             {
                 var result = await DispatchAsync(action, payload, actionCancellation.Token);
-                responseJson = JsonSerializer.Serialize(new
+                responseJson = BridgeSupport.CreateSignedEnvelope(new
                 {
                     ok = true,
                     result,
                     bridge_session_id = SessionId,
                     project_path = CurrentProjectPath(),
-                });
+                }, QueueSigningKey);
             }
             finally
             {
@@ -214,15 +219,19 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
         }
         catch (Exception exception)
         {
-            responseJson = JsonSerializer.Serialize(new
+            var errorPayload = new Dictionary<string, object?>
             {
-                ok = false,
-                error = exception.Message,
-                type = exception.GetType().Name,
-                detail = exception.ToString(),
-                bridge_session_id = SessionId,
-                project_path = CurrentProjectPath(),
-            });
+                ["ok"] = false,
+                ["error"] = BridgeSupport.SafeErrorMessage(exception),
+                ["type"] = exception.GetType().Name,
+                ["bridge_session_id"] = SessionId,
+                ["project_path"] = CurrentProjectPath(),
+            };
+            if (IncludeDebugDetails)
+            {
+                errorPayload["detail"] = exception.ToString();
+            }
+            responseJson = BridgeSupport.CreateSignedEnvelope(errorPayload, QueueSigningKey);
         }
 
         var cachePath = Path.Combine(completedDirectory, idempotencyKey + ".json");
@@ -267,6 +276,7 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
 
     private static async Task WatchCancellationAsync(
         string cancellationPath,
+        string expectedJobId,
         CancellationTokenSource actionCancellation,
         CancellationToken bridgeCancellation)
     {
@@ -275,10 +285,54 @@ internal sealed class BridgeModule : ArcGIS.Desktop.Framework.Contracts.Module
         {
             if (File.Exists(cancellationPath))
             {
-                actionCancellation.Cancel();
-                return;
+                if (await IsValidCancellationAsync(
+                    cancellationPath, expectedJobId, bridgeCancellation))
+                {
+                    actionCancellation.Cancel();
+                    return;
+                }
             }
             await Task.Delay(100, bridgeCancellation);
+        }
+    }
+
+    private static async Task<bool> IsValidCancellationAsync(
+        string cancellationPath,
+        string expectedJobId,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(cancellationPath))
+        {
+            return false;
+        }
+        try
+        {
+            var envelopeJson = await File.ReadAllTextAsync(
+                cancellationPath, cancellationToken);
+            using var document = BridgeSupport.OpenVerifiedSignedPayload(
+                envelopeJson, QueueSigningKey);
+            var root = document.RootElement;
+            var jobId = root.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String
+                    ? id.GetString()
+                    : null;
+            return string.Equals(jobId, expectedJobId, StringComparison.Ordinal);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 

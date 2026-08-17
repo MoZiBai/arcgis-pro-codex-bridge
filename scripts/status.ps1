@@ -87,6 +87,43 @@ if (Test-Path -LiteralPath $configPath) {
     else {
         Fail 'ArcGIS Pro executable could not be found from the installed config.'
     }
+    $signingKeyPath = if (($config.PSObject.Properties.Name -contains 'live_bridge_hmac_key_file') -and
+        $config.live_bridge_hmac_key_file) {
+        [System.IO.Path]::GetFullPath([string]$config.live_bridge_hmac_key_file)
+    }
+    else { '' }
+    if (-not $signingKeyPath -or -not (Test-Path -LiteralPath $signingKeyPath -PathType Leaf)) {
+        Fail 'Live bridge signing key is missing from the private configuration.'
+    }
+    else {
+        try {
+            $signingKey = [Convert]::FromBase64String(
+                [System.IO.File]::ReadAllText($signingKeyPath).Trim())
+            if ($signingKey.Length -lt 32) {
+                Fail 'Live bridge signing key contains fewer than 32 bytes.'
+            }
+            elseif (-not (Test-ArcGISBridgePrivatePathAcl -Path $signingKeyPath)) {
+                Fail "Live bridge signing key ACL is not private: $signingKeyPath"
+            }
+            else {
+                Pass 'Live bridge signing key exists and has a private Windows ACL.'
+            }
+        }
+        catch {
+            Fail "Live bridge signing key is invalid: $_"
+        }
+    }
+    $queuePath = if (($config.PSObject.Properties.Name -contains 'live_bridge_queue') -and
+        $config.live_bridge_queue) {
+        [System.IO.Path]::GetFullPath([string]$config.live_bridge_queue)
+    }
+    else { '' }
+    if (-not $queuePath -or -not (Test-ArcGISBridgePrivatePathAcl -Path $queuePath)) {
+        Fail "Live bridge queue ACL is missing or not private: $queuePath"
+    }
+    else {
+        Pass 'Live bridge queue has a private Windows ACL.'
+    }
 }
 
 $addinRoot = if ($manifest.PSObject.Properties.Name -contains 'addin_directory' -and $manifest.addin_directory) {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import tempfile
@@ -18,12 +19,18 @@ def make_server(root: Path, *, fallback: bool = True) -> ArcGISMCP:
     data = root / "data"
     output = root / "output"
     queue = root / "queue"
+    signing_key = root / "live-bridge.key"
     data.mkdir()
+    signing_key.write_text(
+        base64.b64encode(b"fallback-contract-signing-key-32b").decode("ascii"),
+        encoding="ascii",
+    )
     config = {
         "arcgis_python": sys.executable,
         "allowed_data_roots": [str(data)],
         "output_root": str(output),
         "live_bridge_queue": str(queue),
+        "live_bridge_hmac_key_file": str(signing_key),
         "live_arcpy_worker_fallback": fallback,
         "timeout_seconds": 30,
     }

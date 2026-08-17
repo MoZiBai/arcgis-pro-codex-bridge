@@ -10,11 +10,12 @@ Connect Codex to the currently open ArcGIS Pro project through a local MCP
 server, ArcPy, and an ArcGIS Pro SDK add-in—without mouse or keyboard automation.
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.28.2-486581)](docs/live-bridge-protocol-v0.28.2.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.29.0-486581)](docs/live-bridge-protocol-v0.29.0.md)
+[![CI](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#security-boundaries)
 [![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-The current release exposes 253 MCP tools. Of these, 236 use the add-in to work
+The current source exposes 253 MCP tools. Of these, 236 use the add-in to work
 with the active ArcGIS Pro session. The server can be registered as a standard
 stdio MCP in Codex or used by another MCP-compatible client.
 
@@ -105,7 +106,7 @@ The installer:
 
 1. Verifies ArcGIS Pro 3.6 and the system Python runtime.
 2. Installs the stable MCP runtime under `%LOCALAPPDATA%\ArcGISCodexBridge`.
-3. Creates a machine-private safety configuration.
+3. Creates a machine-private safety configuration, HMAC key, and Windows ACLs.
 4. Validates and installs the prebuilt `.esriAddinX` package.
 5. Registers the `arcgis-pro` MCP in the user-level `~/.codex/config.toml`.
 
@@ -153,6 +154,8 @@ Key settings:
 | `allowed_data_roots` | Data roots that may be read | installation `data` directory |
 | `output_root` | Root for every derived output | installation `outputs` directory |
 | `live_bridge_queue` | Local MCP-to-add-in queue | installation `queue` directory |
+| `live_bridge_hmac_key_file` | Private HMAC key used to authenticate queue messages | installation `config/live-bridge.key` |
+| `include_debug_details` | Include full Add-in exceptions in private diagnostic detail/logs | `false` |
 | `allow_source_editing` | Permit source-data edits | `false` |
 | `allow_destructive_tools` | Permit delete or truncate operations | `false` |
 | `allow_schema_changes` | Permit field and schema changes | `false` |
@@ -171,6 +174,11 @@ require an MCP restart.
   workflow actions are disabled by default.
 - Generic ArcPy execution and specialized tools share the same safety gates.
 - Framework control requires both the master switch and an exact ID allowlist.
+- Jobs, results, and cancellation markers use HMAC-SHA256 authentication.
+- The installer removes inherited ACLs from the private config, signing key, and
+  queue, then grants access only to the current user, SYSTEM, and Administrators.
+- Public MCP errors always redact absolute paths; private Add-in exception
+  detail/logging is disabled unless `include_debug_details` is explicitly enabled.
 - Project changes prefer a new `.aprx` copy instead of overwriting the source.
 - The ArcPy fallback runs only after an explicit Windows Security load error;
   ordinary worker failures do not trigger it.
@@ -214,6 +222,7 @@ Core protocol and safety checks:
 
 ```powershell
 python .\scripts\protocol_contract_test.py
+python .\scripts\mcp_protocol_contract_test.py
 python .\scripts\version_contract_test.py
 python .\scripts\safety_contract_test.py
 python .\scripts\runtime_safety_contract_test.py
@@ -244,7 +253,7 @@ The add-in is retained by default. Remove it explicitly with:
 ## Documentation
 
 - [Installation and lifecycle](docs/installation.md)
-- [Protocol v0.28.2](docs/live-bridge-protocol-v0.28.2.md)
+- [Protocol v0.29.0](docs/live-bridge-protocol-v0.29.0.md)
 - [Live bridge design](docs/live-bridge-design.md)
 - [Capability matrix](docs/capability-matrix.md)
 - [SDK coverage audit](docs/sdk-coverage-audit-v0.27.md)
