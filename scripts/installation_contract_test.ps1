@@ -50,12 +50,12 @@ args = ["serve"]
     if ($applied -notmatch 'experimental_bearer_token\s*=\s*"must-preserve"') {
         throw 'Global registration did not preserve an unrelated credential field.'
     }
-    if ($applied -notmatch '(?m)^\[mcp_servers\.fastctx\]$') {
+    if ($applied -notmatch '(?m)^\[mcp_servers\.fastctx\]\r?$') {
         throw 'Global registration did not preserve another MCP server.'
     }
     $arcgisHeaders = [regex]::Matches(
         $applied,
-        '(?m)^\[mcp_servers\.(?:arcgis-pro|"arcgis-pro")\]$'
+        '(?m)^\[mcp_servers\.(?:arcgis-pro|"arcgis-pro")\]\r?$'
     ).Count
     if ($arcgisHeaders -ne 1) {
         throw "Global registration must be idempotent; found $arcgisHeaders arcgis-pro tables."
@@ -86,11 +86,11 @@ args = ["serve"]
         throw 'Global registration removal reported no change.'
     }
     $removed = [System.IO.File]::ReadAllText($configPath)
-    if ($removed -match '(?m)^\[mcp_servers\.(?:arcgis-pro|"arcgis-pro")\]$') {
+    if ($removed -match '(?m)^\[mcp_servers\.(?:arcgis-pro|"arcgis-pro")\]\r?$') {
         throw 'Global registration removal left the arcgis-pro table behind.'
     }
     if ($removed -notmatch 'experimental_bearer_token\s*=\s*"must-preserve"' -or
-        $removed -notmatch '(?m)^\[mcp_servers\.fastctx\]$') {
+        $removed -notmatch '(?m)^\[mcp_servers\.fastctx\]\r?$') {
         throw 'Global registration removal damaged unrelated configuration.'
     }
 
