@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-VERSION = "0.29.0"
+VERSION = "0.30.0"
 ROOT = Path(__file__).resolve().parents[2]
 WORKER = Path(__file__).with_name("worker.py")
 LOG = logging.getLogger("arcgis_mcp")
@@ -5750,7 +5750,7 @@ class ArcGISMCP:
                     session_id = result.get("bridge_session_id")
                     if not isinstance(session_id, str) or not session_id:
                         raise RuntimeError(
-                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.29.0 and restart ArcGIS Pro."
+                            "The ArcGIS Pro Add-in uses an older live protocol; install v0.30.0 and restart ArcGIS Pro."
                         )
                     with self._live_identity_lock:
                         self._live_session_id = session_id

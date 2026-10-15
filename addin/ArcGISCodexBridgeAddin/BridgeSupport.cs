@@ -13,7 +13,7 @@ namespace ArcGISCodexBridgeAddin;
 
 internal static class BridgeSupport
 {
-    internal const string ProtocolVersion = "0.29.0";
+    internal const string ProtocolVersion = "0.30.0";
     internal const string QueueSignatureVersion = "hmac-sha256-v1";
 
     internal static string ResolveInstallRoot()

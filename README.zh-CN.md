@@ -10,16 +10,16 @@
 ArcGIS Pro 项目，无需鼠标键盘自动化。
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.29.0-486581)](docs/live-bridge-protocol-v0.29.0.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.30.0-486581)](docs/live-bridge-protocol-v0.30.0.md)
 [![CI](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
 [![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-当前未发布源码提供 259 个 MCP 工具，其中 238 个工具直接派发到 Add-in 操作当前 ArcGIS Pro
+当前版本提供 259 个 MCP 工具，其中 238 个工具直接派发到 Add-in 操作当前 ArcGIS Pro
 会话。服务器可作为标准 stdio MCP 注册到 Codex，也可供其他兼容 MCP 的客户端使用。
 
-源码更新包括空白/模板项目创建、原生图例筛选排序、基础布局检查、任务进度/历史/取消
-及诊断探针改进，尚未包含在已发布的 v0.29.0 ZIP 中。布局检查仍为原型：点文字和
+v0.30.0 包含空白/模板项目创建、原生图例筛选排序、基础布局检查、任务进度/历史/取消
+及诊断探针改进，详见[发布说明](docs/release-v0.30.0.md)。布局检查仍为原型：点文字和
 外部刻度可能出现零尺寸误报，视觉重心与指示线碰撞仍需检查实际预览。
 
 ## 主要能力
@@ -76,8 +76,8 @@ ArcMap / ArcGIS Desktop 10.2–10.8 使用不同的 Python、ArcObjects 和 Add-
 推荐从 GitHub Releases 下载：
 
 ```text
-arcgis-pro-codex-bridge-0.29.0-win-x64.zip
-arcgis-pro-codex-bridge-0.29.0-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.30.0-win-x64.zip
+arcgis-pro-codex-bridge-0.30.0-win-x64.zip.sha256
 ```
 
 验证 SHA-256 后解压，在 PowerShell 中运行：
@@ -227,11 +227,11 @@ Release 生命周期测试在临时目录中完成解压、逐文件哈希验证
 ## 文档
 
 - [安装与生命周期](docs/installation.md)
-- [v0.29.0 协议](docs/live-bridge-protocol-v0.29.0.md)
+- [v0.30.0 协议](docs/live-bridge-protocol-v0.30.0.md)
 - [实时桥接设计](docs/live-bridge-design.md)
 - [能力矩阵](docs/capability-matrix.md)
 - [SDK 覆盖审计](docs/sdk-coverage-audit-v0.27.md)
-- [v0.29.0 Release 说明](docs/release-v0.29.0.md)
+- [v0.30.0 Release 说明](docs/release-v0.30.0.md)
 
 ## 许可证
 

@@ -10,18 +10,18 @@ Connect Codex to the currently open ArcGIS Pro project through a local MCP
 server, ArcPy, and an ArcGIS Pro SDK add-in—without mouse or keyboard automation.
 
 [![ArcGIS Pro](https://img.shields.io/badge/ArcGIS%20Pro-3.6-2C7AC3)](https://www.esri.com/en-us/arcgis/products/arcgis-pro/overview)
-[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.29.0-486581)](docs/live-bridge-protocol-v0.29.0.md)
+[![Protocol](https://img.shields.io/badge/bridge%20protocol-0.30.0-486581)](docs/live-bridge-protocol-v0.30.0.md)
 [![CI](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/MoZiBai/arcgis-pro-codex-bridge/actions/workflows/ci.yml)
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#security-boundaries)
 [![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-The unreleased source exposes 259 MCP tools. Of these, 238 directly dispatch to the add-in to work
+The current release exposes 259 MCP tools. Of these, 238 directly dispatch to the add-in to work
 with the active ArcGIS Pro session. The server can be registered as a standard
 stdio MCP in Codex or used by another MCP-compatible client.
 
-Source updates include blank/template project creation, native legend filtering
+Version 0.30.0 includes blank/template project creation, native legend filtering
 and ordering, basic layout checks, job progress/history/cancellation, and a more
-robust diagnostic probe. They are not included in the published v0.29.0 ZIP.
+robust diagnostic probe. See the [release notes](docs/release-v0.30.0.md).
 Layout checks remain a prototype: point text and external tick labels can cause
 false zero-size errors, and visual balance and leader-line collisions still
 require preview inspection.
@@ -97,8 +97,8 @@ architectures and are not supported by this release.
 Download these files from GitHub Releases:
 
 ```text
-arcgis-pro-codex-bridge-0.29.0-win-x64.zip
-arcgis-pro-codex-bridge-0.29.0-win-x64.zip.sha256
+arcgis-pro-codex-bridge-0.30.0-win-x64.zip
+arcgis-pro-codex-bridge-0.30.0-win-x64.zip.sha256
 ```
 
 Verify the SHA-256 checksum, extract the ZIP, and run in PowerShell:
@@ -260,11 +260,11 @@ The add-in is retained by default. Remove it explicitly with:
 ## Documentation
 
 - [Installation and lifecycle](docs/installation.md)
-- [Protocol v0.29.0](docs/live-bridge-protocol-v0.29.0.md)
+- [Protocol v0.30.0](docs/live-bridge-protocol-v0.30.0.md)
 - [Live bridge design](docs/live-bridge-design.md)
 - [Capability matrix](docs/capability-matrix.md)
 - [SDK coverage audit](docs/sdk-coverage-audit-v0.27.md)
-- [Release notes v0.29.0](docs/release-v0.29.0.md)
+- [Release notes v0.30.0](docs/release-v0.30.0.md)
 
 ## License
 
