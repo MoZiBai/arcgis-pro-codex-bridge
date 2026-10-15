@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -418,6 +419,113 @@ def action_add_data(arcpy: Any, payload: dict[str, Any]) -> dict[str, Any]:
     return {"source_aprx": source, "output_aprx": output, "map": map_obj.name, "added": added}
 
 
+def _project_inventory(project: Any) -> dict[str, Any]:
+    maps = []
+    for map_obj in project.listMaps():
+        maps.append(
+            {
+                "name": map_obj.name,
+                "layers": [layer_info(layer) for layer in map_obj.listLayers()],
+                "tables": [{"name": table.name} for table in map_obj.listTables()],
+            }
+        )
+    layouts = []
+    for layout in project.listLayouts():
+        layouts.append(
+            {
+                "name": layout.name,
+                "page_width": getattr(layout, "pageWidth", None),
+                "page_height": getattr(layout, "pageHeight", None),
+                "elements": [{"name": element.name, "type": element.type} for element in layout.listElements()],
+            }
+        )
+    return {"maps": maps, "layouts": layouts}
+
+
+def action_create_project_from_template(arcpy: Any, payload: dict[str, Any]) -> dict[str, Any]:
+    """Create a derived project transactionally from a blank/template APRX.
+
+    The template is opened read-only from the worker's perspective. All edits
+    happen in a staging APRX, which is moved into place only after every
+    requested map/layout/frame/layer operation succeeds.
+    """
+    template = payload["template_aprx"]
+    output = Path(payload["output_aprx"])
+    overwrite = bool(payload.get("overwrite", False))
+    if Path(template).resolve() == output.resolve():
+        raise ValueError("output_aprx must be different from template_aprx")
+    if output.suffix.casefold() != ".aprx":
+        raise ValueError("output_aprx must end in .aprx")
+    if output.exists() and not overwrite:
+        raise FileExistsError(f"Output project already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = output.with_name(f".{output.stem}.staging-{os.getpid()}-{os.urandom(4).hex()}{output.suffix}")
+    backup = output.with_name(output.name + ".previous") if output.exists() else None
+    project = arcpy.mp.ArcGISProject(template)
+    before = _project_inventory(project)
+    try:
+        project.saveACopy(str(staging))
+        project = arcpy.mp.ArcGISProject(str(staging))
+        changes: list[dict[str, Any]] = []
+
+        map_name = payload.get("map_name") or "Map"
+        maps = project.listMaps(map_name)
+        map_obj = maps[0] if maps else project.createMap(map_name)
+        if not maps:
+            changes.append({"type": "map_created", "name": map_obj.name})
+
+        layout_name = payload.get("layout_name") or "Layout"
+        layouts = project.listLayouts(layout_name)
+        layout = layouts[0] if layouts else project.createLayout(
+            float(payload.get("page_width", 29.7)),
+            float(payload.get("page_height", 21.0)),
+            str(payload.get("page_units", "CENTIMETER")),
+            layout_name,
+        )
+        if not layouts:
+            changes.append({"type": "layout_created", "name": layout.name})
+
+        frame_name = payload.get("map_frame_name") or "Map Frame"
+        existing_frames = [
+            element for element in layout.listElements("MAPFRAME_ELEMENT")
+            if element.name.casefold() == frame_name.casefold()
+        ]
+        if not existing_frames:
+            point = arcpy.Point(
+                float(payload.get("map_frame_x", 1.0)),
+                float(payload.get("map_frame_y", 1.0)),
+            )
+            layout.createMapFrame(point, map_obj, frame_name)
+            changes.append({"type": "map_frame_created", "name": frame_name, "map": map_obj.name})
+
+        added = []
+        for path in payload.get("data_paths") or []:
+            layer = map_obj.addDataFromPath(path)
+            added.append({"path": path, "layer": getattr(layer, "name", None)})
+        if added:
+            changes.append({"type": "layers_added", "count": len(added), "layers": added})
+
+        project.save()
+        after = _project_inventory(project)
+        if backup is not None:
+            shutil.copy2(output, backup)
+        os.replace(staging, output)
+        return {
+            "template_aprx": template,
+            "output_aprx": str(output),
+            "created": True,
+            "rollback_backup": str(backup) if backup is not None else None,
+            "before": before,
+            "after": after,
+            "changes": changes,
+            "source_project_modified": False,
+            "source_data_modified": False,
+        }
+    finally:
+        if staging.exists():
+            staging.unlink()
+
+
 def action_export_layout(arcpy: Any, payload: dict[str, Any]) -> dict[str, Any]:
     project = arcpy.mp.ArcGISProject(payload["aprx_path"])
     layouts = project.listLayouts(payload["layout_name"])
@@ -446,6 +554,7 @@ ACTIONS = {
     "run_gp": action_run_gp,
     "project_info": action_project_info,
     "add_data": action_add_data,
+    "create_project_from_template": action_create_project_from_template,
     "export_layout": action_export_layout,
 }
 

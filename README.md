@@ -15,9 +15,16 @@ server, ArcPy, and an ArcGIS Pro SDK add-in—without mouse or keyboard automati
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#security-boundaries)
 [![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-The current source exposes 253 MCP tools. Of these, 236 use the add-in to work
+The unreleased source exposes 259 MCP tools. Of these, 238 directly dispatch to the add-in to work
 with the active ArcGIS Pro session. The server can be registered as a standard
 stdio MCP in Codex or used by another MCP-compatible client.
+
+Source updates include blank/template project creation, native legend filtering
+and ordering, basic layout checks, job progress/history/cancellation, and a more
+robust diagnostic probe. They are not included in the published v0.29.0 ZIP.
+Layout checks remain a prototype: point text and external tick labels can cause
+false zero-size errors, and visual balance and leader-line collisions still
+require preview inspection.
 
 ## Key capabilities
 
@@ -235,7 +242,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_lifecycle_
 
 The Release lifecycle test extracts the package in a temporary directory,
 verifies every hash, scans for private information, installs without MSBuild,
-discovers all 253 tools, and uninstalls without touching real GIS data or the
+discovers all 259 tools, and uninstalls without touching real GIS data or the
 actual add-in directory.
 
 ## Uninstalling

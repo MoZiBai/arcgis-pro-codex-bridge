@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,207 @@ def _safe_error_message(error: BaseException) -> str:
 
 class RequestCancelled(RuntimeError):
     pass
+
+
+class JobRegistry:
+    """Bounded in-process MCP job registry with optional progress notifications."""
+
+    def __init__(self, output_root: Path, max_history: int = 200) -> None:
+        self._output_root = output_root.resolve()
+        self._max_history = max(20, min(max_history, 1000))
+        self._lock = threading.RLock()
+        self._records: dict[str, dict[str, Any]] = {}
+        self._order: deque[str] = deque()
+        self._cancellations: dict[str, threading.Event] = {}
+        self._emit = None
+
+    def set_emitter(self, emitter: Any) -> None:
+        self._emit = emitter
+
+    @staticmethod
+    def _now() -> float:
+        return time.time()
+
+    def start(
+        self,
+        job_id: str,
+        request_id: Any,
+        tool: str,
+        cancellation: threading.Event,
+        progress_token: Any = None,
+    ) -> None:
+        now = self._now()
+        record = {
+            "job_id": job_id,
+            "request_id": request_id,
+            "tool": tool,
+            "status": "queued",
+            "phase": "queued",
+            "progress": 0.0,
+            "started_at": None,
+            "created_at": now,
+            "finished_at": None,
+            "duration_seconds": None,
+            "error": None,
+            "outputs": [],
+            "progress_token": progress_token,
+        }
+        with self._lock:
+            self._records[job_id] = record
+            self._order.append(job_id)
+            self._cancellations[job_id] = cancellation
+            self._trim_locked()
+        self._notify(record)
+
+    def running(self, job_id: str) -> None:
+        self.update(job_id, "running", 0.05, status="running")
+
+    def update(
+        self,
+        job_id: str,
+        phase: str,
+        progress: float,
+        *,
+        status: str | None = None,
+        message: str | None = None,
+    ) -> None:
+        with self._lock:
+            record = self._records.get(job_id)
+            if record is None:
+                return
+            if record["started_at"] is None and (status or "") == "running":
+                record["started_at"] = self._now()
+            record["phase"] = phase
+            record["progress"] = max(0.0, min(1.0, float(progress)))
+            if status:
+                record["status"] = status
+            if message:
+                record["message"] = message[:500]
+            snapshot = dict(record)
+        self._notify(snapshot)
+
+    def finish(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        error: str | None = None,
+        result: Any = None,
+    ) -> None:
+        finished = self._now()
+        with self._lock:
+            record = self._records.get(job_id)
+            if record is None:
+                return
+            started = record.get("started_at") or record.get("created_at") or finished
+            record["started_at"] = record.get("started_at") or started
+            record["finished_at"] = finished
+            record["duration_seconds"] = round(max(0.0, finished - started), 3)
+            record["status"] = status
+            record["phase"] = "completed" if status == "completed" else status
+            record["progress"] = 1.0 if status == "completed" else record.get("progress", 0.0)
+            record["error"] = error[:1000] if error else None
+            record["outputs"] = _collect_output_artifacts(result, self._output_root)
+            snapshot = dict(record)
+            self._cancellations.pop(job_id, None)
+        self._notify(snapshot)
+
+    def cancel(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            record = self._records.get(job_id)
+            event = self._cancellations.get(job_id)
+            if record is None:
+                return {"job_id": job_id, "status": "unknown", "cancel_requested": False}
+            if record["status"] in {"completed", "failed", "cancelled"}:
+                return self._public(record) | {"cancel_requested": False}
+            if event is not None:
+                event.set()
+            record["status"] = "cancelling"
+            record["phase"] = "cancelling"
+            snapshot = dict(record)
+        self._notify(snapshot)
+        return self._public(snapshot) | {"cancel_requested": True}
+
+    def status(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            record = self._records.get(job_id)
+            if record is None:
+                return {"job_id": job_id, "status": "unknown", "found": False}
+            return self._public(record) | {"found": True}
+
+    def history(self, limit: int = 20) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 200))
+        with self._lock:
+            records = [
+                self._public(self._records[job_id])
+                for job_id in reversed(self._order)
+                if job_id in self._records
+            ][:limit]
+        return {"jobs": records, "count": len(records), "retention": "process", "max_history": self._max_history}
+
+    def _public(self, record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in record.items()
+            if key != "progress_token"
+        }
+
+    def _trim_locked(self) -> None:
+        while len(self._order) > self._max_history:
+            oldest = self._order.popleft()
+            if oldest in self._cancellations:
+                self._order.append(oldest)
+                break
+            self._records.pop(oldest, None)
+
+    def _notify(self, record: dict[str, Any]) -> None:
+        token = record.get("progress_token")
+        if token is None or self._emit is None:
+            return
+        params = {
+            "progressToken": token,
+            "progress": record.get("progress", 0.0),
+            "total": 1.0,
+            "message": f"{record.get('phase', 'running')} (job {record.get('job_id')})",
+            "job_id": record.get("job_id"),
+        }
+        try:
+            self._emit({"jsonrpc": "2.0", "method": "notifications/progress", "params": params})
+        except Exception:
+            LOG.debug("Could not emit MCP progress notification", exc_info=True)
+
+
+def _collect_output_artifacts(value: Any, output_root: Path) -> list[dict[str, Any]]:
+    """Collect only output-root paths from a tool result, without exposing sources."""
+    found: dict[str, dict[str, Any]] = {}
+    root = output_root.resolve()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child)
+        elif isinstance(item, str) and Path(item).is_absolute():
+            candidate = Path(item).resolve(strict=False)
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                return
+            if candidate == root:
+                return
+            key = str(candidate).casefold()
+            found[key] = {
+                "path": str(candidate),
+                "exists": candidate.exists(),
+                "is_file": candidate.is_file(),
+                "size_bytes": candidate.stat().st_size if candidate.is_file() else None,
+                "suffix": candidate.suffix.lower(),
+            }
+
+    visit(value)
+    return sorted(found.values(), key=lambda item: item["path"].casefold())
 
 SERVER_INSTRUCTIONS = (
     "Use this ArcGIS Pro server only when the user's request clearly involves "
@@ -195,6 +397,38 @@ TOOLS = [
         "name": "arcgis_status",
         "description": "Check the configured ArcGIS Pro Python/ArcPy runtime and report its version.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "arcgis_job_status",
+        "description": "Inspect one MCP tool job by its JSON-RPC request id. Returns phase, bounded progress, timing, cancellation state, errors, and output-root artifacts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"job_id": {"type": "string", "minLength": 1}},
+            "required": ["job_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "arcgis_job_history",
+        "description": "List the bounded in-process history of recent MCP tool jobs without exposing source paths or request arguments.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20}},
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "arcgis_cancel_job",
+        "description": "Request cancellation of an active MCP tool job by JSON-RPC request id. Cancellation is cooperative and requires explicit confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "minLength": 1},
+                "confirm_cancel": {"type": "boolean", "const": True},
+            },
+            "required": ["job_id", "confirm_cancel"],
+            "additionalProperties": False,
+        },
     },
     {
         "name": "search_arcgis_framework_registry",
@@ -367,6 +601,29 @@ TOOLS = [
         },
     },
     {
+        "name": "create_project_from_template",
+        "description": "Create a new editable .aprx from a blank/template project copy, then add a map, layout, map frame, and optional base layers transactionally.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "template_aprx": {"type": "string"},
+                "output_aprx": {"type": "string"},
+                "overwrite": {"type": "boolean", "default": False},
+                "map_name": {"type": "string", "default": "Map"},
+                "layout_name": {"type": "string", "default": "Layout"},
+                "map_frame_name": {"type": "string", "default": "Map Frame"},
+                "page_width": {"type": "number", "exclusiveMinimum": 0, "default": 29.7},
+                "page_height": {"type": "number", "exclusiveMinimum": 0, "default": 21.0},
+                "page_units": {"type": "string", "enum": ["CENTIMETER", "MILLIMETER", "INCH", "POINT"], "default": "CENTIMETER"},
+                "map_frame_x": {"type": "number", "default": 1.0},
+                "map_frame_y": {"type": "number", "default": 1.0},
+                "data_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 1000, "default": []},
+            },
+            "required": ["template_aprx", "output_aprx"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "export_layout",
         "description": "Export a named layout from an .aprx to PDF or PNG under the configured output root.",
         "inputSchema": {
@@ -385,6 +642,36 @@ TOOLS = [
         "name": "live_bridge_status",
         "description": "Check the ArcGIS Pro in-app bridge and return detailed maps, layers, layouts, elements, protocol version, and capabilities.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "live_create_blank_project",
+        "description": "Create a new editable blank .aprx through the ArcGIS Pro SDK even when no project is currently loaded. The caller must choose output_aprx under the configured output root; the bridge verifies that ArcGIS Pro switched to that exact file and reports its absolute path. Source datasets are never modified.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "output_aprx": {"type": "string", "description": "Exact destination .aprx under the configured output root. Relative paths are resolved against that root and the verified absolute path is returned."},
+                "project_name": {"type": "string", "minLength": 1, "description": "Project display name, not a filesystem path. Defaults to the output filename without .aprx."},
+                "overwrite": {"type": "boolean", "default": False},
+                "create_map": {"type": "boolean", "default": False},
+                "map_name": {"type": "string", "minLength": 1},
+                "map_type": {"type": "string", "enum": ["Map", "Scene"], "default": "Map"},
+                "viewing_mode": {"type": "string", "enum": ["Map", "SceneLocal", "SceneGlobal"]},
+                "basemap": {"type": "string", "default": "None"},
+                "create_layout": {"type": "boolean", "default": False},
+                "layout_name": {"type": "string", "minLength": 1},
+                "page_width": {"type": "number", "exclusiveMinimum": 0, "default": 29.7},
+                "page_height": {"type": "number", "exclusiveMinimum": 0, "default": 21.0},
+                "page_units": {"type": "string", "enum": ["CENTIMETER", "MILLIMETER", "INCH", "POINT"], "default": "CENTIMETER"},
+                "create_map_frame": {"type": "boolean", "default": True},
+                "map_frame_name": {"type": "string", "minLength": 1, "default": "Map Frame"},
+                "map_frame_bounds": {"type": ["object", "null"]},
+                "data_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 1000, "default": []},
+                "open_map": {"type": "boolean", "default": False},
+                "open_layout": {"type": "boolean", "default": False},
+            },
+            "required": ["output_aprx"],
+            "additionalProperties": False,
+        },
     },
     {
         "name": "live_capabilities",
@@ -2354,6 +2641,28 @@ TOOLS = [
         }
     },
     {
+        "name": "live_validate_layout",
+        "description": "Run a non-destructive layout quality check using native ArcGIS Pro element geometry. Reports page overflow, zero-size elements, visible element overlaps, required legend/north-arrow/scale-bar surrounds, and actual legend item counts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layout_name": {"type": "string"},
+                "include_hidden": {"type": "boolean", "default": False},
+                "check_overlaps": {"type": "boolean", "default": True},
+                "minimum_overlap_area": {"type": "number", "minimum": 0, "default": 0.05},
+                "minimum_element_width": {"type": "number", "minimum": 0, "default": 0.25},
+                "minimum_element_height": {"type": "number", "minimum": 0, "default": 0.25},
+                "required_surrounds": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["legend", "north_arrow", "scale_bar"]},
+                    "maxItems": 3,
+                },
+            },
+            "required": ["layout_name"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "live_duplicate_layout",
         "description": "Duplicate an editable layout without changing its source maps or datasets.",
         "inputSchema": {
@@ -3112,6 +3421,9 @@ TOOLS = [
                 "convert_character_markers": {"type": "boolean"},
                 "compress_vector_graphics": {"type": "boolean"},
                 "include_nonvisible_map_layers": {"type": "boolean"},
+                "validate_before_export": {"type": "boolean", "default": False},
+                "allow_invalid_export": {"type": "boolean", "default": False},
+                "validation": {"type": "object", "additionalProperties": True},
             },
             "required": ["layout_name", "output_file"],
             "additionalProperties": False,
@@ -3900,6 +4212,14 @@ TOOLS = [
                 "style_search": {"type": ["string", "null"]},
                 "title": {"type": ["string", "null"]},
                 "show_title": {"type": "boolean"},
+                "layer_names": {"type": "array", "items": {"type": "string"}, "maxItems": 10000},
+                "legend_order": {"type": "array", "items": {"type": "string"}, "maxItems": 10000},
+                "show_layer_name": {"type": "boolean"},
+                "show_group_layer_name": {"type": "boolean"},
+                "show_heading": {"type": "boolean"},
+                "show_labels": {"type": "boolean"},
+                "show_description": {"type": "boolean"},
+                "show_counts": {"type": "boolean"},
                 "auto_add": {"type": "boolean"},
                 "units": {"type": "string"},
                 "unit_label": {"type": "string"},
@@ -3932,6 +4252,14 @@ TOOLS = [
                 "style_search": {"type": ["string", "null"]},
                 "title": {"type": ["string", "null"]},
                 "show_title": {"type": "boolean"},
+                "layer_names": {"type": "array", "items": {"type": "string"}, "maxItems": 10000},
+                "legend_order": {"type": "array", "items": {"type": "string"}, "maxItems": 10000},
+                "show_layer_name": {"type": "boolean"},
+                "show_group_layer_name": {"type": "boolean"},
+                "show_heading": {"type": "boolean"},
+                "show_labels": {"type": "boolean"},
+                "show_description": {"type": "boolean"},
+                "show_counts": {"type": "boolean"},
                 "auto_add": {"type": "boolean"},
                 "units": {"type": "string"},
                 "unit_label": {"type": "string"},
@@ -4754,6 +5082,7 @@ class ArcGISMCP:
         self.live_arcpy_worker_fallback = bool(
             self.config.get("live_arcpy_worker_fallback", True)
         )
+        self.jobs = JobRegistry(self.output_root)
         self._request_local = threading.local()
         self._live_identity_lock = threading.RLock()
         self._live_session_id: str | None = None
@@ -4767,19 +5096,42 @@ class ArcGISMCP:
         name: str,
         arguments: dict[str, Any],
         cancellation: threading.Event,
+        job_id: str | None = None,
     ) -> Any:
         self._request_local.cancellation = cancellation
+        self._request_local.job_id = job_id
         try:
             if cancellation.is_set():
                 raise RequestCancelled("MCP request was cancelled")
-            return self.call_tool(name, arguments)
+            if job_id:
+                self.jobs.running(job_id)
+                self._report_progress("running", 0.05)
+            result = self.call_tool(name, arguments)
+            if job_id:
+                self._report_progress("completed", 1.0)
+                self.jobs.finish(job_id, status="completed", result=result)
+            return result
+        except RequestCancelled as exc:
+            if job_id:
+                self.jobs.finish(job_id, status="cancelled", error=_safe_error_message(exc))
+            raise
+        except Exception as exc:
+            if job_id:
+                self.jobs.finish(job_id, status="failed", error=_safe_error_message(exc))
+            raise
         finally:
             self._request_local.cancellation = None
+            self._request_local.job_id = None
 
     def _check_cancelled(self) -> None:
         cancellation = getattr(self._request_local, "cancellation", None)
         if cancellation is not None and cancellation.is_set():
             raise RequestCancelled("MCP request was cancelled")
+
+    def _report_progress(self, phase: str, progress: float, message: str | None = None) -> None:
+        job_id = getattr(self._request_local, "job_id", None)
+        if job_id:
+            self.jobs.update(job_id, phase, progress, message=message)
 
     @staticmethod
     def _load_config(path: Path) -> dict[str, Any]:
@@ -5260,6 +5612,7 @@ class ArcGISMCP:
     def _run_worker(self, action: str, payload: dict[str, Any]) -> Any:
         if not self.arcgis_python.exists():
             raise FileNotFoundError(f"ArcGIS Python launcher not found: {self.arcgis_python}")
+        self._report_progress(f"starting {action}", 0.10)
         request = {"action": action, "payload": payload}
         process: subprocess.Popen[str] | None = None
         try:
@@ -5305,7 +5658,9 @@ class ArcGISMCP:
             if process.returncode != 0:
                 detail = stderr.strip() or stdout or f"exit code {process.returncode}"
                 raise RuntimeError(f"ArcGIS worker failed: {detail}")
-            return self._worker_result(stdout, stderr)
+            result = self._worker_result(stdout, stderr)
+            self._report_progress(f"finished {action}", 0.90)
+            return result
         except Exception as direct_error:
             if process is not None:
                 self._terminate_process_tree(process)
@@ -5348,6 +5703,7 @@ class ArcGISMCP:
         _bind_identity: bool = True,
     ) -> Any:
         timeout = self.live_timeout if timeout_seconds is None else timeout_seconds
+        self._report_progress(f"queueing live action {action}", 0.10)
         expected_session: str | None = None
         expected_project: str | None = None
         if _bind_identity and action not in {"status", "capabilities"}:
@@ -5405,7 +5761,9 @@ class ArcGISMCP:
                         if detail and detail != error:
                             error = f"{error}\n{detail}"
                         raise RuntimeError(error)
-                    return result.get("result")
+                    live_result = result.get("result")
+                    self._report_progress(f"finished live action {action}", 0.90)
+                    return live_result
                 time.sleep(0.1)
             raise TimeoutError(
                 "ArcGIS Pro live bridge did not respond. Ensure ArcGIS Pro is open, a project is loaded, "
@@ -5563,6 +5921,7 @@ class ArcGISMCP:
         allowed_actions = {
             "capabilities",
             "status",
+            "create_blank_project",
             "project_inventory",
             "save_project",
             "get_metadata",
@@ -5665,6 +6024,7 @@ class ArcGISMCP:
             "get_map_graphic_cim",
             "set_map_graphic_cim",
             "create_layout",
+            "validate_layout",
             "duplicate_layout",
             "rename_layout",
             "remove_layout",
@@ -5942,11 +6302,15 @@ class ArcGISMCP:
                 if output.suffix.casefold() != ".esritasks":
                     raise ValueError("output_file must end in .esriTasks")
                 normalized["output_file"] = str(output)
-        elif action in {"save_project_as", "save_copy"}:
+        elif action in {"save_project_as", "save_copy", "create_blank_project"}:
             output = self._write_path(payload["output_aprx"])
             if output.suffix.lower() != ".aprx":
                 raise ValueError("output_aprx must end in .aprx")
             normalized["output_aprx"] = str(output)
+            if action == "create_blank_project" and payload.get("data_paths"):
+                normalized["data_paths"] = [
+                    str(self._read_path(path)) for path in payload.get("data_paths", [])
+                ]
         else:
             self._validate_embedded_paths(normalized)
         return normalized
@@ -6109,6 +6473,17 @@ class ArcGISMCP:
         return response
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if name == "arcgis_job_status":
+            return self.jobs.status(str(arguments["job_id"]))
+
+        if name == "arcgis_job_history":
+            return self.jobs.history(int(arguments.get("limit", 20)))
+
+        if name == "arcgis_cancel_job":
+            if arguments.get("confirm_cancel") is not True:
+                raise ValueError("confirm_cancel=true is required")
+            return self.jobs.cancel(str(arguments["job_id"]))
+
         if name == "live_patch_cim_object":
             return self._patch_cim_object(dict(arguments))
 
@@ -6230,6 +6605,32 @@ class ArcGISMCP:
                 },
             )
 
+        if name == "create_project_from_template":
+            template = self._read_path(arguments["template_aprx"])
+            output = self._write_path(arguments["output_aprx"])
+            if template.resolve() == output.resolve():
+                raise ValueError("output_aprx must be different from template_aprx")
+            if output.suffix.lower() != ".aprx":
+                raise ValueError("output_aprx must end in .aprx")
+            data_paths = [str(self._read_path(path)) for path in arguments.get("data_paths", [])]
+            return self._run_worker(
+                "create_project_from_template",
+                {
+                    "template_aprx": str(template),
+                    "output_aprx": str(output),
+                    "overwrite": bool(arguments.get("overwrite", False)),
+                    "map_name": arguments.get("map_name"),
+                    "layout_name": arguments.get("layout_name"),
+                    "map_frame_name": arguments.get("map_frame_name"),
+                    "page_width": float(arguments.get("page_width", 29.7)),
+                    "page_height": float(arguments.get("page_height", 21.0)),
+                    "page_units": arguments.get("page_units", "CENTIMETER"),
+                    "map_frame_x": float(arguments.get("map_frame_x", 1.0)),
+                    "map_frame_y": float(arguments.get("map_frame_y", 1.0)),
+                    "data_paths": data_paths,
+                },
+            )
+
         if name == "export_layout":
             aprx = self._read_path(arguments["aprx_path"])
             output = self._write_path(arguments["output_file"])
@@ -6261,6 +6662,12 @@ class ArcGISMCP:
                 "allowed_backstage_pages": sorted(self.allowed_backstage_pages),
             }
             return status
+
+        if name == "live_create_blank_project":
+            return self._run_live(
+                "create_blank_project",
+                self._prepare_live_action("create_blank_project", dict(arguments)),
+            )
 
         if name == "live_capabilities":
             capabilities = self._run_live("capabilities", {})
@@ -6737,6 +7144,9 @@ class ArcGISMCP:
         if name == "live_create_layout":
             return self._run_live("create_layout", dict(arguments))
 
+        if name == "live_validate_layout":
+            return self._run_live("validate_layout", dict(arguments))
+
         if name == "live_duplicate_layout":
             return self._run_live("duplicate_layout", dict(arguments))
 
@@ -6870,10 +7280,24 @@ class ArcGISMCP:
             payload = dict(arguments)
             payload["output_file"] = str(output)
             payload["dpi"] = int(arguments.get("dpi", 300))
-            return self._run_live(
+            quality_report = None
+            if bool(arguments.get("validate_before_export", False)):
+                quality_payload = dict(arguments.get("validation", {}))
+                quality_payload["layout_name"] = arguments["layout_name"]
+                quality_report = self._run_live("validate_layout", quality_payload)
+                if isinstance(quality_report, dict) and quality_report.get("error_count", 0) > 0:
+                    if not bool(arguments.get("allow_invalid_export", False)):
+                        raise ValueError({
+                            "message": "Layout quality validation failed; export was blocked.",
+                            "layout_quality_report": quality_report,
+                        })
+            result = self._run_live(
                 "export_layout",
                 payload,
             )
+            if quality_report is not None and isinstance(result, dict):
+                result["layout_quality_report"] = quality_report
+            return result
 
         if name == "live_list_reports":
             return self._run_live("list_reports", {})
@@ -7171,28 +7595,42 @@ def emit(message: dict[str, Any]) -> None:
 def serve(server: ArcGISMCP) -> None:
     # MCP stdio transport is UTF-8. Reading the binary stream avoids the
     # system GBK code page corrupting Chinese dataset and folder names.
-    pending: dict[Any, tuple[threading.Event, concurrent.futures.Future[Any]]] = {}
+    pending: dict[Any, tuple[threading.Event, concurrent.futures.Future[Any], str]] = {}
     pending_lock = threading.Lock()
     executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=min(32, (os.cpu_count() or 4) + 4),
         thread_name_prefix="arcgis-mcp",
     )
+    if hasattr(server, "jobs"):
+        server.jobs.set_emitter(emit)
 
-    def finish_tool(request_id: Any, future: concurrent.futures.Future[Any]) -> None:
+    def job_id_for(request_id: Any) -> str:
+        return str(request_id)
+
+    def finish_tool(
+        request_id: Any,
+        future: concurrent.futures.Future[Any],
+        job_id: str,
+    ) -> None:
         with pending_lock:
             pending.pop(request_id, None)
         try:
             tool_result = future.result()
             text = json.dumps(tool_result, ensure_ascii=False, indent=2, default=str)
             result = {"content": [{"type": "text", "text": text}], "isError": False}
+            if hasattr(server, "jobs"):
+                result["structuredContent"] = {"job_id": job_id, "status": "completed"}
             emit(response(request_id, result=result))
         except Exception as exc:
             if isinstance(exc, RequestCancelled):
                 LOG.info("Tool request cancelled: %s", request_id)
+                data = {"type": type(exc).__name__}
+                if hasattr(server, "jobs"):
+                    data["job_id"] = job_id
                 emit(response(request_id, error={
                     "code": -32800,
                     "message": _safe_error_message(exc),
-                    "data": {"type": type(exc).__name__},
+                    "data": data,
                 }))
             else:
                 if bool(getattr(server, "include_debug_details", False)):
@@ -7207,13 +7645,16 @@ def serve(server: ArcGISMCP) -> None:
                     "error": _safe_error_message(exc),
                     "type": type(exc).__name__,
                 }
-                emit(response(request_id, result={
+                tool_result = {
                     "content": [{
                         "type": "text",
                         "text": json.dumps(tool_error, ensure_ascii=False),
                     }],
                     "isError": True,
-                }))
+                }
+                if hasattr(server, "jobs"):
+                    tool_result["structuredContent"] = {"job_id": job_id, "status": "failed"}
+                emit(response(request_id, result=tool_result))
 
     try:
         input_stream = sys.stdin.buffer
@@ -7245,17 +7686,33 @@ def serve(server: ArcGISMCP) -> None:
                     if request_id is None:
                         continue
                     cancellation = threading.Event()
-                    future = executor.submit(
-                        server.execute_tool,
+                    job_id = job_id_for(request_id)
+                    metadata = params.get("_meta") if isinstance(params, dict) else None
+                    progress_token = metadata.get("progressToken") if isinstance(metadata, dict) else None
+                    if hasattr(server, "jobs"):
+                        server.jobs.start(
+                            job_id,
+                            request_id,
+                            str(params.get("name", "")),
+                            cancellation,
+                            progress_token,
+                        )
+                    submit_args = (
+                        params["name"],
+                        params.get("arguments") or {},
+                        cancellation,
+                        job_id,
+                    ) if hasattr(server, "jobs") else (
                         params["name"],
                         params.get("arguments") or {},
                         cancellation,
                     )
+                    future = executor.submit(server.execute_tool, *submit_args)
                     with pending_lock:
-                        pending[request_id] = (cancellation, future)
+                        pending[request_id] = (cancellation, future, job_id)
                     future.add_done_callback(
-                        lambda completed, current_id=request_id: finish_tool(
-                            current_id, completed
+                        lambda completed, current_id=request_id, current_job=job_id: finish_tool(
+                            current_id, completed, current_job
                         )
                     )
                     continue
@@ -7265,6 +7722,8 @@ def serve(server: ArcGISMCP) -> None:
                         pending_request = pending.get(cancelled_id)
                     if pending_request:
                         pending_request[0].set()
+                        if hasattr(server, "jobs"):
+                            server.jobs.cancel(pending_request[2])
                     continue
                 elif method == "notifications/initialized":
                     continue
@@ -7298,7 +7757,7 @@ def serve(server: ArcGISMCP) -> None:
     finally:
         with pending_lock:
             outstanding = list(pending.values())
-        for cancellation, _ in outstanding:
+        for cancellation, _, _ in outstanding:
             cancellation.set()
         executor.shutdown(wait=True, cancel_futures=True)
 

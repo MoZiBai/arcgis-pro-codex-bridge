@@ -223,6 +223,7 @@ internal static class BridgeSupport
     internal static readonly string[] Capabilities =
     {
         "status",
+        "create_blank_project",
         "project_inventory",
         "save_project",
         "get_metadata",
@@ -328,6 +329,7 @@ internal static class BridgeSupport
         "get_map_graphic_cim",
         "set_map_graphic_cim",
         "create_layout",
+        "validate_layout",
         "duplicate_layout",
         "rename_layout",
         "remove_layout",

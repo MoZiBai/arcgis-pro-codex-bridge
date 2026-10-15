@@ -14,6 +14,9 @@ and MCP protocol behavior.
 - 工具执行失败使用 MCP `isError=true` 结果；请求取消继续使用 JSON-RPC 取消错误。
 - MCP 初始化不再回显客户端任意协议版本，仅协商服务器实际支持的
   `2024-11-05`。
+- 未发布源码新增（不包含在本页 v0.29.0 安装包中）`live_create_blank_project`：即使 ArcGIS Pro 当前没有加载项目，也能通过
+  ArcGIS Pro SDK 创建可编辑的空白 `.aprx`；可选初始化地图、布局、地图框和数据引用，
+  输出严格限制在配置的 output root。
 - 发布前验证覆盖 Python、PowerShell、Add-in 编译、包版本、安装生命周期和
   Release ZIP 隔离测试；GitHub CI 自动运行无需 ArcGIS Pro 的契约测试。
 

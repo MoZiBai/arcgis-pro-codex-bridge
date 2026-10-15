@@ -1,7 +1,32 @@
 # ArcGIS Codex live bridge protocol v0.29.0
 
-Protocol v0.29.0 is a security and interoperability release for ArcGIS Pro 3.6.
-It does not add new GIS actions.
+Protocol v0.29.0 defines the authenticated queue for ArcGIS Pro 3.6.
+The current source adds optional actions while keeping the queue and safety
+contracts. These additions are not included in the published v0.29.0 ZIP.
+
+## Source additions, not included in the published v0.29.0 ZIP
+
+### Project creation without a current project
+
+`create_blank_project` is implemented with the public
+`Project.CreateAsync(CreateProjectSettings)` SDK API and uses the `Untitled`
+template type. It can run when `Project.Current` is null and creates a new
+editable `.aprx` under the configured output root. Optional fields bootstrap a
+map, layout, map frame, and data references after creation; source datasets are
+read-only by default. The MCP route is `live_create_blank_project`.
+
+The caller must provide `output_aprx`; the bridge does not silently choose a
+project location. The value is normalized under the configured output root and
+means the exact final project file, not a containing directory. Creation fails
+unless ArcGIS Pro's current project path equals that value and the file exists.
+SDK-created default geodatabase, toolbox, and indexing artifacts live in the
+reported sibling `project_support_folder`.
+
+Creation first materializes the SDK's untitled project inside the reported
+support folder, then persists the requested base structure, and finally invokes
+`SaveAsAsync` for the caller's exact output file. This two-stage ordering avoids
+ArcGIS Pro's untitled-project folder interpretation and is covered by the
+lifecycle test.
 
 ## Authenticated local queue
 

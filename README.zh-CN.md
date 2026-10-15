@@ -15,8 +15,12 @@ ArcGIS Pro 项目，无需鼠标键盘自动化。
 [![Safety](https://img.shields.io/badge/source%20editing-disabled%20by%20default-2E8B57)](#安全边界)
 [![License](https://img.shields.io/badge/license-Apache--2.0-D22128)](LICENSE)
 
-当前源码提供 253 个 MCP 工具，其中 236 个工具通过 Add-in 操作当前 ArcGIS Pro
+当前未发布源码提供 259 个 MCP 工具，其中 238 个工具直接派发到 Add-in 操作当前 ArcGIS Pro
 会话。服务器可作为标准 stdio MCP 注册到 Codex，也可供其他兼容 MCP 的客户端使用。
+
+源码更新包括空白/模板项目创建、原生图例筛选排序、基础布局检查、任务进度/历史/取消
+及诊断探针改进，尚未包含在已发布的 v0.29.0 ZIP 中。布局检查仍为原型：点文字和
+外部刻度可能出现零尺寸误报，视觉重心与指示线碰撞仍需检查实际预览。
 
 ## 主要能力
 
@@ -206,7 +210,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\release_lifecycle_
 ```
 
 Release 生命周期测试在临时目录中完成解压、逐文件哈希验证、隐私扫描、无 MSBuild
-安装、253 工具发现和卸载，不写入真实 GIS 数据或实际 Add-in 目录。
+安装、259 工具发现和卸载，不写入真实 GIS 数据或实际 Add-in 目录。
 
 ## 卸载
 

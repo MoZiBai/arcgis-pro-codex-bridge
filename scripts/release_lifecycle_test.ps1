@@ -210,7 +210,7 @@ try {
         throw "Installed MCP probe failed: $($probeOutput -join [Environment]::NewLine)"
     }
     $probeResult = ($probeOutput -join [Environment]::NewLine) | ConvertFrom-Json
-    if ($probeResult.server.version -ne $sourceVersion -or $probeResult.toolCount -ne 253 -or
+    if ($probeResult.server.version -ne $sourceVersion -or $probeResult.toolCount -ne 259 -or
         -not $probeResult.instructions) {
         throw "Unexpected MCP probe result: $($probeOutput -join [Environment]::NewLine)"
     }
@@ -310,7 +310,7 @@ try {
         throw 'Release uninstall left the isolated Add-in directory behind.'
     }
 
-    Write-Output 'release lifecycle ok: exact ZIP, privacy, exact Add-in state, late-failure rollback, 253-tool probe, and exact uninstall'
+    Write-Output 'release lifecycle ok: exact ZIP, privacy, exact Add-in state, late-failure rollback, 259-tool probe, and exact uninstall'
 }
 finally {
     $resolvedTemp = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')

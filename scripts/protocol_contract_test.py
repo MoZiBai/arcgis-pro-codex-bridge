@@ -17,6 +17,7 @@ DISPATCH_SOURCE = ROOT / "addin" / "ArcGISCodexBridgeAddin" / "BridgeModule.cs"
 TOOL_TO_ACTION = {
     "live_bridge_status": "status",
     "live_capabilities": "capabilities",
+    "live_create_blank_project": "create_blank_project",
     "live_project_inventory": "project_inventory",
     "live_save_project": "save_project",
     "live_get_metadata": "get_metadata",
@@ -119,6 +120,7 @@ TOOL_TO_ACTION = {
     "live_get_map_graphic_cim": "get_map_graphic_cim",
     "live_set_map_graphic_cim": "set_map_graphic_cim",
     "live_create_layout": "create_layout",
+    "live_validate_layout": "validate_layout",
     "live_duplicate_layout": "duplicate_layout",
     "live_rename_layout": "rename_layout",
     "live_remove_layout": "remove_layout",

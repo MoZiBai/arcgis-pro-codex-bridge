@@ -29,6 +29,10 @@ experimental_bearer_token = "must-preserve"
 [mcp_servers.fastctx]
 command = "fastctx"
 args = ["serve"]
+
+[mcp_servers.arcgis-pro]
+type = "stdio"
+command = "obsolete-launcher"
 '@
     [System.IO.File]::WriteAllText(
         $configPath,
@@ -52,6 +56,10 @@ args = ["serve"]
     }
     if ($applied -notmatch '(?m)^\[mcp_servers\.fastctx\]\r?$') {
         throw 'Global registration did not preserve another MCP server.'
+    }
+    if ($applied -match '(?m)^[ \t]*type[ \t]*=' -or
+        $applied -match 'obsolete-launcher') {
+        throw 'Re-registration retained a legacy transport type or obsolete command.'
     }
     $arcgisHeaders = [regex]::Matches(
         $applied,

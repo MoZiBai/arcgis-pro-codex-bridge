@@ -126,6 +126,261 @@ internal static class LayoutActions
         return result;
     }
 
+    internal static async Task<object> ValidateAsync(
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var layoutName = BridgeSupport.String(payload, "layout_name")
+            ?? throw new ArgumentException("layout_name is required");
+        var includeHidden = BridgeSupport.Bool(payload, "include_hidden", false);
+        var checkOverlaps = BridgeSupport.Bool(payload, "check_overlaps", true);
+        var minimumOverlapArea = Math.Max(
+            0,
+            BridgeSupport.Double(payload, "minimum_overlap_area", 0.05));
+        var minimumElementWidth = Math.Max(
+            0,
+            BridgeSupport.Double(payload, "minimum_element_width", 0.25));
+        var minimumElementHeight = Math.Max(
+            0,
+            BridgeSupport.Double(payload, "minimum_element_height", 0.25));
+        var requiredSurrounds = BridgeSupport.Strings(payload, "required_surrounds")
+            .Select(NormalizeSurroundType)
+            .Where(value => value is "legend" or "north_arrow" or "scale_bar")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return await QueuedTask.Run<object>(() =>
+        {
+            var layout = BridgeSupport.ResolveLayout(layoutName);
+            var page = layout.GetPage();
+            var pageWidth = Math.Max(0, page.Width);
+            var pageHeight = Math.Max(0, page.Height);
+            var bounds = layout.GetElementsAsFlattenedList()
+                .Where(element => includeHidden || element.IsVisible)
+                .Where(element => element is not GroupElement)
+                .Select(element =>
+                {
+                    var extent = element.GetGeometry().Extent;
+                    var surround = element as MapSurround;
+                    int? legendItems = null;
+                    if (surround is not null
+                        && NormalizeSurroundType(surround) == "legend"
+                        && surround.GetDefinition() is CIMLegend legendDefinition)
+                    {
+                        legendItems = legendDefinition.Items?.Length ?? 0;
+                    }
+                    return new LayoutBounds(
+                        element.Name,
+                        element.GetType().Name,
+                        extent.XMin,
+                        extent.YMin,
+                        extent.XMax,
+                        extent.YMax,
+                        element.IsVisible,
+                        NormalizeSurroundType(surround),
+                        legendItems);
+                })
+                .ToArray();
+
+            var issues = new List<object>();
+            foreach (var item in bounds)
+            {
+                if (item.Width <= 0 || item.Height <= 0)
+                {
+                    issues.Add(new
+                    {
+                        severity = "error",
+                        kind = "zero_size",
+                        element = item.Name,
+                        message = "Layout element has zero or negative width/height.",
+                    });
+                }
+                else if (item.Width < minimumElementWidth || item.Height < minimumElementHeight)
+                {
+                    issues.Add(new
+                    {
+                        severity = "warning",
+                        kind = "too_small",
+                        element = item.Name,
+                        width = item.Width,
+                        height = item.Height,
+                        minimum_width = minimumElementWidth,
+                        minimum_height = minimumElementHeight,
+                        message = "Layout element is smaller than the configured review threshold.",
+                    });
+                }
+                if (item.XMin < 0 || item.YMin < 0 || item.XMax > pageWidth || item.YMax > pageHeight)
+                {
+                    issues.Add(new
+                    {
+                        severity = "error",
+                        kind = "outside_page",
+                        element = item.Name,
+                        message = "Visible layout element extends outside the page bounds.",
+                        page_width = pageWidth,
+                        page_height = pageHeight,
+                        x_min = item.XMin,
+                        y_min = item.YMin,
+                        x_max = item.XMax,
+                        y_max = item.YMax,
+                    });
+                }
+            }
+
+            if (checkOverlaps)
+            {
+                for (var leftIndex = 0; leftIndex < bounds.Length; leftIndex++)
+                {
+                    for (var rightIndex = leftIndex + 1; rightIndex < bounds.Length; rightIndex++)
+                    {
+                        var left = bounds[leftIndex];
+                        var right = bounds[rightIndex];
+                        var overlapWidth = Math.Min(left.XMax, right.XMax) - Math.Max(left.XMin, right.XMin);
+                        var overlapHeight = Math.Min(left.YMax, right.YMax) - Math.Max(left.YMin, right.YMin);
+                        var overlapArea = overlapWidth > 0 && overlapHeight > 0
+                            ? overlapWidth * overlapHeight
+                            : 0;
+                        if (overlapArea >= minimumOverlapArea)
+                        {
+                            var mapFrameOverlap = (left.SurroundType is not null && right.Type.Contains("MapFrame", StringComparison.OrdinalIgnoreCase))
+                                || (right.SurroundType is not null && left.Type.Contains("MapFrame", StringComparison.OrdinalIgnoreCase));
+                            issues.Add(new
+                            {
+                                severity = "warning",
+                                kind = mapFrameOverlap ? "map_frame_overlap" : "overlap",
+                                elements = new[] { left.Name, right.Name },
+                                overlap_area = overlapArea,
+                                message = "Visible layout elements overlap; review whether this is intentional.",
+                            });
+                        }
+                    }
+                }
+            }
+
+            var surrounds = bounds
+                .Where(item => item.SurroundType is not null)
+                .Select(item => new
+                {
+                    name = item.Name,
+                    surround_type = item.SurroundType,
+                    legend_items = item.LegendItems,
+                    x = item.XMin,
+                    y = item.YMin,
+                    width = item.Width,
+                    height = item.Height,
+                })
+                .ToArray();
+            foreach (var required in requiredSurrounds)
+            {
+                if (!surrounds.Any(item => string.Equals(
+                    item.surround_type, required, StringComparison.OrdinalIgnoreCase)))
+                {
+                    issues.Add(new
+                    {
+                        severity = "error",
+                        kind = "missing_surround",
+                        surround_type = required,
+                        message = $"Required native {required} element was not found.",
+                    });
+                }
+            }
+
+            foreach (var legend in surrounds.Where(item => item.surround_type == "legend"))
+            {
+                if (legend.legend_items is 0)
+                {
+                    issues.Add(new
+                    {
+                        severity = "warning",
+                        kind = "empty_legend",
+                        element = legend.name,
+                        message = "Native legend has no populated legend items.",
+                    });
+                }
+            }
+
+            var errorCount = issues.Count(issue => string.Equals(
+                issue.GetType().GetProperty("severity")?.GetValue(issue)?.ToString(),
+                "error",
+                StringComparison.OrdinalIgnoreCase));
+            var warningCount = issues.Count(issue => string.Equals(
+                issue.GetType().GetProperty("severity")?.GetValue(issue)?.ToString(),
+                "warning",
+                StringComparison.OrdinalIgnoreCase));
+
+            return (object)new
+            {
+                layout = layout.Name,
+                page_width = pageWidth,
+                page_height = pageHeight,
+                page_units = page.Units.ToString(),
+                element_count = bounds.Length,
+                elements = bounds.Select(item => new
+                {
+                    name = item.Name,
+                    type = item.Type,
+                    visible = item.Visible,
+                    x = item.XMin,
+                    y = item.YMin,
+                    width = item.Width,
+                    height = item.Height,
+                    surround_type = item.SurroundType,
+                    legend_items = item.LegendItems,
+                }).ToArray(),
+                surrounds,
+                issues,
+                issue_count = issues.Count,
+                error_count = errorCount,
+                warning_count = warningCount,
+                valid = errorCount == 0,
+                needs_review = warningCount > 0,
+                project_modified = false,
+                source_data_modified = false,
+            };
+        });
+    }
+
+    private sealed record LayoutBounds(
+        string Name,
+        string Type,
+        double XMin,
+        double YMin,
+        double XMax,
+        double YMax,
+        bool Visible,
+        string? SurroundType,
+        int? LegendItems)
+    {
+        internal double Width => XMax - XMin;
+        internal double Height => YMax - YMin;
+    }
+
+    private static string? NormalizeSurroundType(MapSurround? surround)
+    {
+        if (surround is null)
+        {
+            return null;
+        }
+        var name = surround.GetType().Name.ToLowerInvariant();
+        if (name.Contains("legend")) return "legend";
+        if (name.Contains("north")) return "north_arrow";
+        if (name.Contains("scale")) return "scale_bar";
+        return name;
+    }
+
+    private static string? NormalizeSurroundType(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+        var name = value.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
+        if (name.Contains("legend")) return "legend";
+        if (name.Contains("north")) return "north_arrow";
+        if (name.Contains("scale")) return "scale_bar";
+        return name;
+    }
+
     internal static async Task<object> UpdateElementAsync(
         JsonElement payload,
         CancellationToken cancellationToken)
@@ -860,7 +1115,10 @@ internal static class LayoutActions
         var bounds = BridgeSupport.Bounds(
             legendConfig, "bounds", pageWidth - 6.2, 2.4, pageWidth - 1.1, 8.5);
 
-        if (BridgeSupport.Bool(legendConfig, "background", true))
+        // Keep the native legend transparent by default. A separate graphic
+        // background is opt-in because it can obscure the map in compact
+        // academic layouts; users can still request one explicitly.
+        if (BridgeSupport.Bool(legendConfig, "background", false))
         {
             var background = SymbolFactory.Instance.ConstructPolygonSymbol(
                 BridgeSupport.Color(legendConfig, "background_color", ColorFactory.Instance.CreateRGBColor(255, 255, 255, 88)),

@@ -336,7 +336,7 @@ internal static class CartographyActions
         var surroundType = BridgeSupport.String(payload, "surround_type")
             ?? throw new ArgumentException("surround_type is required");
         var elementName = BridgeSupport.String(payload, "element_name", surroundType)!;
-        return await QueuedTask.Run<object>(() =>
+        var created = await QueuedTask.Run<(Legend? Legend, string MapFrame, string Element)>(() =>
         {
             var layout = BridgeSupport.ResolveLayout(layoutName);
             var frame = ResolveMapFrame(layoutName, BridgeSupport.String(payload, "map_frame_name"));
@@ -346,14 +346,20 @@ internal static class CartographyActions
                 layout, bounds, info, elementName, false, null);
             ApplySurroundParameters(surround, payload);
             ApplyOptionalStyle(surround, surroundType, payload);
-            return (object)new
-            {
-                layout = layoutName,
-                map_frame = frame.Name,
-                element = surround.Name,
-                surround_type = surround.GetType().Name,
-            };
+            return (surround as Legend, frame.Name, surround.Name);
         });
+        if (created.Legend is not null && BridgeSupport.Strings(payload, "layer_names").Length > 0)
+        {
+            await FilterLegendItemsAsync(created.Legend, payload, cancellationToken);
+        }
+        return new
+        {
+            layout = layoutName,
+            map_frame = created.MapFrame,
+            element = created.Element,
+            surround_type = surroundType,
+            legend_filtered = created.Legend is not null && BridgeSupport.Strings(payload, "layer_names").Length > 0,
+        };
     }
 
     internal static async Task<object> ConfigureMapSurroundAsync(
@@ -364,7 +370,7 @@ internal static class CartographyActions
             ?? throw new ArgumentException("layout_name is required");
         var elementName = BridgeSupport.String(payload, "element_name")
             ?? throw new ArgumentException("element_name is required");
-        return await QueuedTask.Run<object>(() =>
+        var configured = await QueuedTask.Run<(Legend? Legend, string SurroundType, double X, double Y, double Width, double Height, bool Visible)>(() =>
         {
             var layout = BridgeSupport.ResolveLayout(layoutName);
             var surround = layout.FindElement(elementName) as MapSurround
@@ -377,18 +383,25 @@ internal static class CartographyActions
             ApplyElementTransform(surround, payload);
             ApplySurroundParameters(surround, payload);
             ApplyOptionalStyle(surround, surround.GetType().Name, payload);
-            return (object)new
-            {
-                layout = layoutName,
-                element = surround.Name,
-                surround_type = surround.GetType().Name,
-                x = surround.GetX(),
-                y = surround.GetY(),
-                width = surround.GetWidth(),
-                height = surround.GetHeight(),
-                visible = surround.IsVisible,
-            };
+            return (surround as Legend, surround.GetType().Name, surround.GetX(), surround.GetY(), surround.GetWidth(), surround.GetHeight(), surround.IsVisible);
         });
+        var requestedLayers = BridgeSupport.Strings(payload, "layer_names");
+        if (configured.Legend is not null && requestedLayers.Length > 0)
+        {
+            await FilterLegendItemsAsync(configured.Legend, payload, cancellationToken);
+        }
+        return new
+        {
+            layout = layoutName,
+            element = elementName,
+            surround_type = configured.SurroundType,
+            x = configured.X,
+            y = configured.Y,
+            width = configured.Width,
+            height = configured.Height,
+            visible = configured.Visible,
+            legend_filtered = configured.Legend is not null && requestedLayers.Length > 0,
+        };
     }
 
     internal static async Task<object> SetMapSurroundCimAsync(
@@ -646,6 +659,99 @@ internal static class CartographyActions
             }
             scaleBar.SetDefinition(definition);
         }
+    }
+
+    private static async Task FilterLegendItemsAsync(
+        Legend legend,
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var requestedNames = BridgeSupport.Strings(payload, "layer_names")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (requestedNames.Count == 0)
+            return;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var requestedOrder = BridgeSupport.Strings(payload, "legend_order");
+        if (requestedOrder.Length == 0)
+            requestedOrder = BridgeSupport.Strings(payload, "layer_names");
+        var legendOrder = requestedOrder
+            .Select((name, index) => new { name, index })
+            .ToDictionary(item => item.name, item => item.index, StringComparer.OrdinalIgnoreCase);
+        var legendState = await QueuedTask.Run(() =>
+        {
+            var mapFrame = legend.MapFrame;
+            var map = mapFrame?.Map
+                ?? throw new InvalidOperationException("Legend is not linked to a map frame.");
+            var layers = map.GetLayersAsFlattenedList()
+                .Where(layer => requestedNames.Contains(layer.Name))
+                .ToArray();
+            return (
+                IncludedUris: layers.Select(layer => layer.URI).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                ItemOrder: layers
+                    .Select((layer, index) => new
+                    {
+                        layer.URI,
+                        Order = legendOrder.TryGetValue(layer.Name, out var requestedIndex)
+                            ? requestedIndex
+                            : requestedOrder.Length + index,
+                    })
+                    .ToDictionary(item => item.URI, item => item.Order, StringComparer.OrdinalIgnoreCase));
+        });
+        if (legendState.IncludedUris.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"None of the requested legend layers were found: {string.Join(", ", requestedNames)}");
+        }
+
+        const int attempts = 20;
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var populated = await QueuedTask.Run(() =>
+            {
+                var definition = (CIMLegend)legend.GetDefinition();
+                return definition.Items is { Length: > 0 };
+            });
+            if (populated)
+                break;
+            await Task.Delay(100, cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        await QueuedTask.Run(() =>
+        {
+            var definition = (CIMLegend)legend.GetDefinition();
+            if (definition.Items is not { Length: > 0 })
+                throw new InvalidOperationException("ArcGIS Pro did not populate legend items within the expected time.");
+            definition.AutoAdd = false;
+            definition.Items = definition.Items
+                .Where(item => legendState.IncludedUris.Contains(item.Layer))
+                .OrderBy(item => legendState.ItemOrder.TryGetValue(item.Layer, out var order) ? order : int.MaxValue)
+                .Select(item => ConfigureLegendItem(item, payload))
+                .ToArray();
+            legend.SetDefinition(definition);
+        });
+    }
+
+    private static CIMLegendItem ConfigureLegendItem(CIMLegendItem source, JsonElement config)
+    {
+        var item = source;
+        item.AutoVisibility = false;
+        item.IsVisible = true;
+        if (config.TryGetProperty("show_layer_name", out _))
+            item.ShowLayerName = BridgeSupport.Bool(config, "show_layer_name", false);
+        if (config.TryGetProperty("show_group_layer_name", out _))
+            item.ShowGroupLayerName = BridgeSupport.Bool(config, "show_group_layer_name", false);
+        if (config.TryGetProperty("show_heading", out _))
+            item.ShowHeading = BridgeSupport.Bool(config, "show_heading", true);
+        if (config.TryGetProperty("show_labels", out _))
+            item.ShowLabels = BridgeSupport.Bool(config, "show_labels", true);
+        if (config.TryGetProperty("show_description", out _))
+            item.ShowDescription = BridgeSupport.Bool(config, "show_description", false);
+        if (config.TryGetProperty("show_counts", out _))
+            item.ShowCounts = BridgeSupport.Bool(config, "show_counts", false);
+        return item;
     }
 
     private static LinearUnit ParseUnit(string? value)
